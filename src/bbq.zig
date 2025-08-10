@@ -413,27 +413,6 @@ pub fn BBQ(comptime T: type) type {
     };
 }
 
-const TestRng = struct {
-    s: u64,
-
-    fn init(seed: u64) TestRng {
-        return .{ .s = if (seed == 0) 0x9E3779B97F4A7C15 else seed };
-    }
-
-    fn next(self: *TestRng) u64 {
-        // SplitMix64
-        self.s +%= 0x9E3779B97F4A7C15;
-        var z: u64 = self.s;
-        z = (z ^ (z >> 30)) *% @as(u64, 0xBF58476D1CE4E5B9);
-        z = (z ^ (z >> 27)) *% @as(u64, 0x94D049BB133111EB);
-        return z ^ (z >> 31);
-    }
-
-    fn nextU32(self: *TestRng) u32 {
-        return @as(u32, @truncate(self.next()));
-    }
-};
-
 test "BBQ (retry-new) enqueues fill the queue then return an error indicating that it is full" {
     const T = u8;
     const options = BlockOptions{ .block_number = 4, .block_size = 2 };
@@ -641,13 +620,14 @@ test "BBQ with 3 blocks exposes old mask bug: interleave enq/deq works" {
 }
 
 test "QVar bitfield encode/decode roundtrip for arbitrary sizes" {
-    var rng = TestRng.init(0xA1B2C3D4E5F60718);
+    var random = std.Random.DefaultPrng.init(42);
+    var rng = random.random();
 
     const trials: usize = 12;
     var t: usize = 0;
     while (t < trials) : (t += 1) {
-        const bn: u32 = 2 + @as(u32, @intCast(rng.nextU32() % 13)); // [2..14]
-        const bs: u32 = 2 + @as(u32, @intCast(rng.nextU32() % 11)); // [2..12]
+        const bn: u32 = 2 + @as(u32, @intCast(rng.int(u32) % 13)); // [2..14]
+        const bs: u32 = 2 + @as(u32, @intCast(rng.int(u32) % 11)); // [2..12]
         const options = BlockOptions{ .block_number = bn, .block_size = bs };
 
         const qv = QVar.init(options);
