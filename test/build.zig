@@ -7,17 +7,18 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const bbq_module = b.addModule("bbq", .{
+    const bbqt_mod = b.addModule("bbq-test", .{
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("src/bbq.zig"),
+        .root_source_file = b.path("src/main.zig"),
     });
 
-    const bbq_lib = b.addLibrary(.{
-        .name = "bbq",
+    const bbqt_exe = b.addExecutable(.{
+        .name = "bbqt",
         .linkage = .static,
-        .root_module = bbq_module,
+        .root_module = bbqt_mod,
     });
 
-    b.installArtifact(bbq_lib);
+    const run_step = b.step("run", "runs the application");
+    run_step.dependOn(&bbqt_exe.step);
 }
