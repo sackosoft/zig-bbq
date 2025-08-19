@@ -5,7 +5,6 @@ const std = @import("std");
 const bbq = @import("bbq");
 
 // Hard-coded scenario parameters (stress defaults)
-const RUN_STRESS: bool = false; // enable in next step
 const PRODUCERS: u32 = 8;
 const CONSUMERS: u32 = 1;
 const BLOCK_NUMBER: u32 = 31; // small capacity to force contention
@@ -41,12 +40,6 @@ pub fn main() !void {
     const got = try q.dequeue();
     if (got.producer_id != 0 or got.seq != 0 or got.checksum != checksum(0, 0)) {
         return error.InitSmokeFailed;
-    }
-
-    // If only validating initialization wiring, stop here.
-    if (!RUN_STRESS) {
-        std.debug.print("BBQ init smoke test passed.\n", .{});
-        return;
     }
 
     // Scenario run
@@ -88,22 +81,6 @@ pub fn main() !void {
     }
     for (consumer_logs) |*lst| lst.* = std.ArrayList(Item).init(alloc);
 
-    // Random helper per-thread
-    const Prng = struct {
-        rng: std.Random.DefaultPrng,
-        fn init(seed: u64) @This() {
-            return .{ .rng = std.Random.DefaultPrng.init(seed) };
-        }
-        fn jitter(self: *@This(), n: u32) void {
-            const v = self.rng.random().intRangeAtMost(u32, 0, n);
-            if (v % 8 == 0) {
-                std.Thread.yield() catch {};
-            } else if (v % 7 == 0) {
-                std.time.sleep(2000); // 2us
-            }
-        }
-    };
-
     // Watchdog
     var wd_stop: u8 = 0;
     const watcher = try std.Thread.spawn(.{}, struct {
@@ -136,14 +113,12 @@ pub fn main() !void {
     for (prod_threads, 0..) |*th, i| {
         th.* = try std.Thread.spawn(.{}, struct {
             fn run(id: u32, queue_ptr: *bbq.BBQ(Item), num_items: u64, barrier_ptr: *Barrier, pc: *u64, progress_ptr: *u64) void {
-                var prng = Prng.init(0xC001D00D + id);
                 barrier_ptr.wait();
                 var seq: u64 = 0;
                 while (seq < num_items) {
                     const it = Item{ .producer_id = id, .seq = seq, .checksum = checksum(id, seq) };
                     queue_ptr.enqueue(it) catch |e| switch (e) {
                         error.Full, error.Busy => {
-                            prng.jitter(31);
                             continue;
                         },
                     };
@@ -162,8 +137,6 @@ pub fn main() !void {
     for (cons_threads, 0..) |*th, cidx| {
         th.* = try std.Thread.spawn(.{}, struct {
             fn run(queue_ptr: *bbq.BBQ(Item), barrier_ptr: *Barrier, total_target: usize, deq_count_ptr: *usize, progress_ptr: *u64, out_log: *std.ArrayList(Item)) void {
-                const seed: u64 = 0xBADBEEF0000 + @as(u64, @intCast(total_target));
-                var prng = Prng.init(seed ^ 0x55);
                 barrier_ptr.wait();
                 while (true) {
                     const done = @atomicLoad(usize, deq_count_ptr, .acquire) >= total_target;
@@ -171,7 +144,6 @@ pub fn main() !void {
 
                     const it = queue_ptr.dequeue() catch |e| switch (e) {
                         error.Empty, error.Busy => {
-                            prng.jitter(31);
                             continue;
                         },
                     };
