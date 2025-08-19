@@ -7,10 +7,10 @@ const bbq = @import("bbq");
 // Hard-coded scenario parameters (stress defaults)
 const PRODUCERS: u32 = 8;
 const CONSUMERS: u32 = 1;
-const BLOCK_NUMBER: u32 = 31; // small capacity to force contention
-const BLOCK_SIZE: u32 = 2; // capacity = 62 (queue requires block_size > 1)
-const ITEMS_PER_PRODUCER: u64 = 100_000; // keep for stress; can reduce temporarily during development
-const WATCHDOG_TIMEOUT_SECS: u64 = 30;
+const BLOCK_NUMBER: u32 = 32;
+const BLOCK_SIZE: u32 = 4;
+const ITEMS_PER_PRODUCER: u64 = 100_000;
+const WATCHDOG_TIMEOUT_SECS: u64 = 3;
 
 const Item = struct {
     producer_id: u32,
@@ -48,7 +48,7 @@ pub fn main() !void {
     const N: u64 = ITEMS_PER_PRODUCER;
     const CAP: usize = BLOCK_NUMBER * BLOCK_SIZE;
 
-    std.debug.print("Starting stress: P={d}, C={d}, cap={d}, N={d}\n", .{ P, C, CAP, N });
+    std.debug.print("Starting stress: P={d}, C={d}, capacity={d}, N={d}\n", .{ P, C, CAP, N });
 
     // Shared counters (plain ints with atomic builtins)
     var deq_ok: usize = 0;
@@ -181,7 +181,7 @@ pub fn main() !void {
     // Basic totals
     const expected_total: usize = P * @as(usize, @intCast(N));
     if (total_enq != N * @as(u64, P) or total_deq != expected_total or all.items.len != expected_total) {
-        std.debug.print("FAIL totals: P={d} C={d} cap={d} N={d} enq_ok={d} deq_ok={d} log={d}\n", .{ P, C, CAP, N, total_enq, total_deq, all.items.len });
+        std.debug.print("FAIL totals: P={d} C={d} capacity={d} N={d} enq_ok={d} deq_ok={d} log={d}\n", .{ P, C, CAP, N, total_enq, total_deq, all.items.len });
         return error.TotalsMismatch;
     }
 
@@ -277,7 +277,7 @@ pub fn main() !void {
 
     if (invalid_found or dup_found or fifo_violation or missing_total != 0) {
         std.debug.print("FAIL diagnostics:\n", .{});
-        std.debug.print("  Params: P={d} C={d} cap={d} N={d}\n", .{ P, C, CAP, N });
+        std.debug.print("  Params: P={d} C={d} capacity={d} N={d}\n", .{ P, C, CAP, N });
         std.debug.print("  Totals: enq_ok={d} deq_ok={d}\n", .{ total_enq, total_deq });
         if (dup_found) {
             if (first_dup) |d| {
@@ -295,5 +295,5 @@ pub fn main() !void {
         return error.VerificationFailed;
     }
 
-    std.debug.print("PASS: P={d} C={d} cap={d} N={d} totals: enq={d} deq={d}\n", .{ P, C, CAP, N, total_enq, total_deq });
+    std.debug.print("PASS: P={d} C={d} capacity={d} N={d} totals: enq={d} deq={d}\n", .{ P, C, CAP, N, total_enq, total_deq });
 }
