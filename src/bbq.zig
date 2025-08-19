@@ -215,26 +215,30 @@ pub fn BBQ(comptime T: type) type {
         }
 
         fn getProducerHead(self: *Self) struct { Head, *Block } {
-            const head = @atomicLoad(Head, &self.p_head, .acquire);
+            const head = @atomicLoad(Head, &self.p_head, .seq_cst);
             const block = &self.blocks[self.qvar.getHeadIndex(head)];
             return .{ head, block };
         }
 
         fn allocateEntry(self: *Self, block: *Block) ?EntryDesc {
-            const allocated = @atomicLoad(Cursor, &block.allocated, .monotonic);
+            const allocated = @atomicLoad(Cursor, &block.allocated, .seq_cst);
             const allocated_offset = self.qvar.getCursorOffset(allocated);
             if (allocated_offset >= self.options.block_size) {
                 return null;
             }
 
-            const old = @atomicRmw(Cursor, &block.allocated, .Add, 1, .acq_rel);
+            const old = @atomicRmw(Cursor, &block.allocated, .Add, 1, .seq_cst);
             const old_offset = self.qvar.getCursorOffset(old);
             if (old_offset >= self.options.block_size) {
                 return null;
             }
 
+            // The paper does NOT indicate that the version should be set. Previously, I had always set this to 0,
+            // as per the paper's description of unspecified fields being set to zero.
+            const old_version = self.qvar.getCursorVersion(old);
+
             return .{
-                .version = 0,
+                .version = old_version,
                 .offset = old_offset,
                 .block = block,
             };
@@ -243,7 +247,7 @@ pub fn BBQ(comptime T: type) type {
         fn commitEntry(entry_descriptor: EntryDesc, data: T) void {
             entry_descriptor.block.entries[entry_descriptor.offset] = data;
 
-            _ = @atomicRmw(Cursor, &entry_descriptor.block.committed, .Add, 1, .release);
+            _ = @atomicRmw(Cursor, &entry_descriptor.block.committed, .Add, 1, .seq_cst);
         }
 
         fn advanceProducerHead(self: *Self, head: Head) error{ NoEntry, NotAvailable }!void {
@@ -257,22 +261,22 @@ pub fn BBQ(comptime T: type) type {
             }
 
             const new_cursor = self.qvar.newCursor(head_version + 1, 0);
-            _ = @atomicRmw(Cursor, &next_block.committed, .Max, new_cursor, .release);
-            _ = @atomicRmw(Cursor, &next_block.allocated, .Max, new_cursor, .release);
+            _ = @atomicRmw(Cursor, &next_block.committed, .Max, new_cursor, .seq_cst);
+            _ = @atomicRmw(Cursor, &next_block.allocated, .Max, new_cursor, .seq_cst);
 
             // 4.2.2 Order Matters - "updating cached heads (...) must happen after updating block-level variables (...), otherwise blocks may be fully skipped."
-            _ = @atomicRmw(Head, &self.p_head, .Max, self.qvar.nextHead(head), .release);
+            _ = @atomicRmw(Head, &self.p_head, .Max, self.qvar.nextHead(head), .seq_cst);
         }
 
         fn advanceProducerHeadRetryNew(self: *Self, head: Head, next_block: *Block) error{ NoEntry, NotAvailable }!void {
             const head_version = self.qvar.getHeadVersion(head);
-            const consumed = @atomicLoad(Cursor, &next_block.consumed, .acquire);
+            const consumed = @atomicLoad(Cursor, &next_block.consumed, .seq_cst);
 
             const consumed_version = self.qvar.getCursorVersion(consumed);
             const consumed_offset = self.qvar.getCursorOffset(consumed);
 
             if (consumed_version < head_version or (consumed_version == head_version and consumed_offset != self.options.block_size)) {
-                const reserved = @atomicLoad(Cursor, &next_block.reserved, .acquire);
+                const reserved = @atomicLoad(Cursor, &next_block.reserved, .seq_cst);
 
                 const reserved_offset = self.qvar.getCursorOffset(reserved);
                 if (reserved_offset == consumed_offset) {
@@ -286,7 +290,7 @@ pub fn BBQ(comptime T: type) type {
         fn advanceProducerHeadDropOld(self: *Self, head: Head, next_block: *Block) error{ NoEntry, NotAvailable }!void {
             const head_version = self.qvar.getHeadVersion(head);
 
-            const committed = @atomicLoad(Cursor, &next_block.committed, .acquire);
+            const committed = @atomicLoad(Cursor, &next_block.committed, .seq_cst);
 
             const committed_version = self.qvar.getCursorVersion(committed);
             const committed_offset = self.qvar.getCursorOffset(committed);
@@ -318,32 +322,32 @@ pub fn BBQ(comptime T: type) type {
         }
 
         fn getConsumerHead(self: *Self) struct { Head, *Block } {
-            const head = @atomicLoad(Head, &self.c_head, .acquire);
+            const head = @atomicLoad(Head, &self.c_head, .seq_cst);
             const block = &self.blocks[self.qvar.getHeadIndex(head)];
             return .{ head, block };
         }
 
         fn reserveEntry(self: *Self, block: *Block, out_reserved_version: *u64) error{ NoEntry, NotAvailable, BlockDone }!EntryDesc {
             while (true) {
-                const reserved = @atomicLoad(Cursor, &block.reserved, .acquire);
+                const reserved = @atomicLoad(Cursor, &block.reserved, .seq_cst);
                 const reserved_version = self.qvar.getCursorVersion(reserved);
                 const reserved_offset = self.qvar.getCursorOffset(reserved);
                 if (reserved_offset < self.options.block_size) {
-                    const committed = @atomicLoad(Cursor, &block.committed, .acquire);
+                    const committed = @atomicLoad(Cursor, &block.committed, .seq_cst);
                     const committed_offset = self.qvar.getCursorOffset(committed);
                     if (reserved_offset == committed_offset) {
                         return error.NoEntry;
                     }
 
                     if (committed_offset != self.options.block_size) {
-                        const allocated = @atomicLoad(Cursor, &block.allocated, .acquire);
+                        const allocated = @atomicLoad(Cursor, &block.allocated, .seq_cst);
                         const allocated_offset = self.qvar.getCursorOffset(allocated);
                         if (allocated_offset != committed_offset) {
                             return error.NotAvailable;
                         }
                     }
 
-                    if (@atomicRmw(Cursor, &block.reserved, .Max, reserved + 1, .acq_rel) == reserved) {
+                    if (@atomicRmw(Cursor, &block.reserved, .Max, reserved + 1, .seq_cst) == reserved) {
                         return .{
                             .block = block,
                             .offset = reserved_offset,
@@ -364,11 +368,11 @@ pub fn BBQ(comptime T: type) type {
 
             switch (self.mode) {
                 .retry_new => {
-                    _ = @atomicRmw(Cursor, &entry_descriptor.block.consumed, .Add, 1, .release);
+                    _ = @atomicRmw(Cursor, &entry_descriptor.block.consumed, .Add, 1, .seq_cst);
                     return data;
                 },
                 .drop_old => {
-                    const allocated = @atomicLoad(Cursor, &entry_descriptor.block.allocated, .acquire);
+                    const allocated = @atomicLoad(Cursor, &entry_descriptor.block.allocated, .seq_cst);
                     const allocated_version = self.qvar.getCursorVersion(allocated);
 
                     // In the drop-old mode, the producer may have overwritten the entry after we started to handle it, in this case
@@ -382,7 +386,7 @@ pub fn BBQ(comptime T: type) type {
             const head_version = self.qvar.getHeadVersion(head);
             const next_block = &self.blocks[(self.qvar.getHeadIndex(head) + 1) % self.blocks.len];
 
-            const committed = @atomicLoad(Cursor, &next_block.committed, .acquire);
+            const committed = @atomicLoad(Cursor, &next_block.committed, .seq_cst);
             const committed_version = self.qvar.getCursorVersion(committed);
 
             switch (self.mode) {
@@ -392,8 +396,8 @@ pub fn BBQ(comptime T: type) type {
                     }
 
                     const next_cursor = self.qvar.newCursor(head_version + 1, 0);
-                    _ = @atomicRmw(Cursor, &next_block.consumed, .Max, next_cursor, .release);
-                    _ = @atomicRmw(Cursor, &next_block.reserved, .Max, next_cursor, .release);
+                    _ = @atomicRmw(Cursor, &next_block.consumed, .Max, next_cursor, .seq_cst);
+                    _ = @atomicRmw(Cursor, &next_block.reserved, .Max, next_cursor, .seq_cst);
                 },
                 .drop_old => {
                     const head_index = self.qvar.getHeadIndex(head);
@@ -402,11 +406,11 @@ pub fn BBQ(comptime T: type) type {
                     }
 
                     const next_cursor = self.qvar.newCursor(committed_version, 0);
-                    _ = @atomicRmw(Cursor, &next_block.reserved, .Max, next_cursor, .release);
+                    _ = @atomicRmw(Cursor, &next_block.reserved, .Max, next_cursor, .seq_cst);
                 },
             }
 
-            _ = @atomicRmw(Head, &self.c_head, .Max, self.qvar.nextHead(head), .release);
+            _ = @atomicRmw(Head, &self.c_head, .Max, self.qvar.nextHead(head), .seq_cst);
             return true;
         }
     };
