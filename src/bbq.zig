@@ -297,7 +297,7 @@ pub fn BBQ(comptime T: type) type {
         }
 
         pub fn dequeue(self: *Self) error{ Empty, Busy }!T {
-            var reserved_version: Cursor = 0;
+            var reserved_version: u64 = 0;
             while (true) {
                 const head, const block = self.getConsumerHead();
 
@@ -323,7 +323,7 @@ pub fn BBQ(comptime T: type) type {
             return .{ head, block };
         }
 
-        fn reserveEntry(self: *Self, block: *Block, out_reserved_version: *Cursor) error{ NoEntry, NotAvailable, BlockDone }!EntryDesc {
+        fn reserveEntry(self: *Self, block: *Block, out_reserved_version: *u64) error{ NoEntry, NotAvailable, BlockDone }!EntryDesc {
             while (true) {
                 const reserved = @atomicLoad(Cursor, &block.reserved, .acquire);
                 const reserved_version = self.qvar.getCursorVersion(reserved);
@@ -332,7 +332,6 @@ pub fn BBQ(comptime T: type) type {
                     const committed = @atomicLoad(Cursor, &block.committed, .acquire);
                     const committed_offset = self.qvar.getCursorOffset(committed);
                     if (reserved_offset == committed_offset) {
-                        out_reserved_version.* = reserved_version;
                         return error.NoEntry;
                     }
 
@@ -353,10 +352,10 @@ pub fn BBQ(comptime T: type) type {
                     } else {
                         continue;
                     }
-                } else {
-                    out_reserved_version.* = reserved_version;
-                    return error.BlockDone;
                 }
+
+                out_reserved_version.* = reserved_version;
+                return error.BlockDone;
             }
         }
 
@@ -379,7 +378,7 @@ pub fn BBQ(comptime T: type) type {
             }
         }
 
-        fn advanceConsumerHead(self: *Self, head: Head, reserved_version: Cursor) bool {
+        fn advanceConsumerHead(self: *Self, head: Head, reserved_version: u64) bool {
             const head_version = self.qvar.getHeadVersion(head);
             const next_block = &self.blocks[(self.qvar.getHeadIndex(head) + 1) % self.blocks.len];
 
