@@ -36,7 +36,14 @@ const QVar = struct {
         assert(block_parameters.block_size >= 2);
         assert(block_parameters.block_number >= 2);
 
-        const cursor_offset_bits = 1 + std.math.log2_int_ceil(u64, block_parameters.block_size);
+        // The paper describes using one bit as overflow protection, however, this does not adequately
+        // project from overflow in cases where the block size is small and number of producers is large.
+        // E.g. when block size = 4 and producers = 8, there is the possibility for the 0b011 offset to
+        // concurrently fetch and add by all producers, causing it to overflow and corrupt the version field.
+        // I don't think we can compute this value, since we cannot know how many producers or consumers will
+        // use the queue. I've added assertions which should detect this condition.
+        const cursor_offset_overflow_bits = 1;
+        const cursor_offset_bits = cursor_offset_overflow_bits + std.math.log2_int_ceil(u64, block_parameters.block_size);
         const head_index_bits = std.math.log2_int_ceil(u64, block_parameters.block_number);
         const version_bits = 64 - @max(cursor_offset_bits, head_index_bits);
 
@@ -228,6 +235,7 @@ pub fn BBQ(comptime T: type) type {
             }
 
             const old = @atomicRmw(Cursor, &block.allocated, .Add, 1, .seq_cst);
+            assert(self.qvar.getCursorVersion(old) == self.qvar.getCursorVersion(old + 1)); // ERROR: Version overflow detected. You may have too many producers and too small of a block size. If #producers exceeds `log2_ceil(block_size)` then you may hit this issue.
             const old_offset = self.qvar.getCursorOffset(old);
             if (old_offset >= self.options.block_size) {
                 return null;
@@ -333,6 +341,8 @@ pub fn BBQ(comptime T: type) type {
                 const reserved_version = self.qvar.getCursorVersion(reserved);
                 const reserved_offset = self.qvar.getCursorOffset(reserved);
                 if (reserved_offset < self.options.block_size) {
+                    assert(self.qvar.getCursorVersion(reserved + 1) == reserved_version); // ERROR: Version overflow detected. You may have too many producers and too small of a block size. If #producers exceeds `log2_ceil(block_size)` then you may hit this issue.
+
                     const committed = @atomicLoad(Cursor, &block.committed, .seq_cst);
                     const committed_offset = self.qvar.getCursorOffset(committed);
                     if (reserved_offset == committed_offset) {
@@ -368,7 +378,8 @@ pub fn BBQ(comptime T: type) type {
 
             switch (self.mode) {
                 .retry_new => {
-                    _ = @atomicRmw(Cursor, &entry_descriptor.block.consumed, .Add, 1, .seq_cst);
+                    const prev = @atomicRmw(Cursor, &entry_descriptor.block.consumed, .Add, 1, .seq_cst);
+                    assert(self.qvar.getCursorVersion(prev + 1) == self.qvar.getCursorVersion(prev)); // ERROR: Version overflow detected. You may have too many producers and too small of a block size. If #producers exceeds `log2_ceil(block_size)` then you may hit this issue.
                     return data;
                 },
                 .drop_old => {
