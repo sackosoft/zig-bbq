@@ -34,7 +34,15 @@ pub const FullHandlingMode = enum {
     drop_old,
 };
 
-pub fn BBQ(comptime T: type) type {
+pub fn RetryNewQueue(comptime T: type) type {
+    return BBQ(T, .retry_new);
+}
+
+pub fn DropOldQueue(comptime T: type) type {
+    return BBQ(T, .drop_old);
+}
+
+fn BBQ(comptime T: type, comptime mode: FullHandlingMode) type {
     return struct {
         const Self = @This();
 
@@ -51,7 +59,6 @@ pub fn BBQ(comptime T: type) type {
 
         alloc: std.mem.Allocator,
         qvar: QVar,
-        mode: FullHandlingMode,
         options: BlockOptions,
 
         data: []T,
@@ -72,7 +79,7 @@ pub fn BBQ(comptime T: type) type {
             entries: []T,
         };
 
-        pub fn init(alloc: std.mem.Allocator, mode: FullHandlingMode, options: BlockOptions) !Self {
+        pub fn init(alloc: std.mem.Allocator, options: BlockOptions) !Self {
             assert(options.block_number > 1);
             assert(options.block_size > 1);
 
@@ -93,7 +100,6 @@ pub fn BBQ(comptime T: type) type {
             return .{
                 .alloc = alloc,
                 .qvar = QVar.init(options),
-                .mode = mode,
                 .options = options,
 
                 .data = data,
@@ -166,7 +172,7 @@ pub fn BBQ(comptime T: type) type {
 
             var next_block = &self.blocks[(self.qvar.getHeadIndex(head) + 1) % self.blocks.len];
 
-            switch (self.mode) {
+            switch (mode) {
                 .retry_new => self.advanceProducerHeadRetryNew(head, next_block) catch |e| return e,
                 .drop_old => self.advanceProducerHeadDropOld(head, next_block) catch |e| return e,
             }
@@ -279,7 +285,7 @@ pub fn BBQ(comptime T: type) type {
         fn consumeEntry(self: *Self, entry_descriptor: EntryDesc) ?T {
             const data = entry_descriptor.block.entries[entry_descriptor.offset];
 
-            switch (self.mode) {
+            switch (mode) {
                 .retry_new => {
                     const prev = @atomicRmw(Cursor, &entry_descriptor.block.consumed, .Add, 1, .seq_cst);
                     assert(self.qvar.getCursorVersion(prev + 1) == self.qvar.getCursorVersion(prev)); // ERROR: Version overflow detected. You may have too many producers and too small of a block size. If #producers exceeds `log2_ceil(block_size)` then you may hit this issue.
@@ -303,7 +309,7 @@ pub fn BBQ(comptime T: type) type {
             const committed = @atomicLoad(Cursor, &next_block.committed, .seq_cst);
             const committed_version = self.qvar.getCursorVersion(committed);
 
-            switch (self.mode) {
+            switch (mode) {
                 .retry_new => {
                     if (committed_version != head_version + 1) {
                         return false;

@@ -72,7 +72,7 @@ pub fn run_regression_test(test_options: RegressionTestOptions) !void {
 
     // Step 1: Ensure we can initialize and deinit the queue.
     const options = bbq.BlockOptions{ .block_number = test_options.block_number, .block_size = test_options.block_size };
-    var q = try bbq.BBQ(Item).init(alloc, .retry_new, options);
+    var q = try bbq.RetryNewQueue(Item).init(alloc, options);
     defer q.deinit();
 
     // Smoke insert/dequeue just to verify wiring before stress logic lands
@@ -155,7 +155,7 @@ pub fn run_regression_test(test_options: RegressionTestOptions) !void {
     defer alloc.free(prod_threads);
     for (prod_threads, 0..) |*th, i| {
         th.* = try std.Thread.spawn(.{}, struct {
-            fn run(id: u32, queue_ptr: *bbq.BBQ(Item), num_items: u64, barrier_ptr: *Barrier, pc: *u64, progress_ptr: *u64) void {
+            fn run(id: u32, queue_ptr: *bbq.RetryNewQueue(Item), num_items: u64, barrier_ptr: *Barrier, pc: *u64, progress_ptr: *u64) void {
                 barrier_ptr.wait();
                 var seq: u64 = 0;
                 while (seq < num_items) {
@@ -179,7 +179,7 @@ pub fn run_regression_test(test_options: RegressionTestOptions) !void {
     defer alloc.free(cons_threads);
     for (cons_threads, 0..) |*th, cidx| {
         th.* = try std.Thread.spawn(.{}, struct {
-            fn run(queue_ptr: *bbq.BBQ(Item), barrier_ptr: *Barrier, total_target: usize, deq_count_ptr: *usize, progress_ptr: *u64, out_log: *std.ArrayList(Item)) void {
+            fn run(queue_ptr: *bbq.RetryNewQueue(Item), barrier_ptr: *Barrier, total_target: usize, deq_count_ptr: *usize, progress_ptr: *u64, out_log: *std.ArrayList(Item)) void {
                 barrier_ptr.wait();
                 while (true) {
                     const done = @atomicLoad(usize, deq_count_ptr, .acquire) >= total_target;
