@@ -1,7 +1,7 @@
 .{
     .name = .bbq,
-    .version = "0.0.0",
-    .fingerprint = 0xc4db8ed33785f48b, // Changing this has security and trust implications.
+    .version = "0.0.1",
+    .fingerprint = 0xc4db8ed33785f48b,
     .minimum_zig_version = "0.14.1",
     .dependencies = .{},
     .paths = .{
