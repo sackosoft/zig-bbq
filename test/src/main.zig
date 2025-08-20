@@ -5,11 +5,11 @@ const std = @import("std");
 const bbq = @import("bbq");
 
 // Hard-coded scenario parameters (stress defaults)
-const PRODUCERS: u32 = 4;
-const CONSUMERS: u32 = 1;
+const PRODUCERS: u32 = 8;
+const CONSUMERS: u32 = 8;
 const BLOCK_NUMBER: u32 = 32;
-const BLOCK_SIZE: u32 = 4;
-const ITEMS_PER_PRODUCER: u64 = 100_000;
+const BLOCK_SIZE: u32 = 8;
+const ITEMS_PER_PRODUCER: u64 = 1_000_000;
 const WATCHDOG_TIMEOUT_SECS: u64 = 3;
 
 const Item = struct {
@@ -216,17 +216,27 @@ pub fn main() !void {
     }
     for (bitsets) |*bs| bs.* = try Bits.init(alloc, @intCast(N));
 
-    // Track FIFO per producer
-    var last_seq = try alloc.alloc(i64, P);
-    defer alloc.free(last_seq);
-    for (last_seq) |*v| v.* = -1;
-
     // Checks
     var dup_found = false;
     var fifo_violation = false;
     var invalid_found = false;
     var first_dup: ?Item = null;
     var fifo_detail: struct { pid: u32, last: i64, cur: i64, pos: usize } = .{ .pid = 0, .last = 0, .cur = 0, .pos = 0 };
+
+    for (consumer_logs) |*lst| {
+        var last_seq: [P]i64 = undefined;
+        @memset(&last_seq, -1);
+        for (lst.items, 0..) |it, pos| {
+            // Ensure items are FIFO
+            const pid: usize = @intCast(it.producer_id);
+            const prev = last_seq[pid];
+            if (!fifo_violation and @as(i64, @intCast(it.seq)) <= prev) {
+                fifo_violation = true;
+                fifo_detail = .{ .pid = it.producer_id, .last = prev, .cur = @intCast(it.seq), .pos = pos };
+            }
+            last_seq[pid] = @intCast(it.seq);
+        }
+    }
 
     for (all.items, 0..) |it, pos| {
         // No spurious values
@@ -242,14 +252,6 @@ pub fn main() !void {
             dup_found = true;
             first_dup = it;
         }
-
-        // FIFO per producer
-        const prev = last_seq[@intCast(it.producer_id)];
-        if (@as(i64, @intCast(it.seq)) <= prev and !fifo_violation) {
-            fifo_violation = true;
-            fifo_detail = .{ .pid = it.producer_id, .last = prev, .cur = @intCast(it.seq), .pos = pos };
-        }
-        last_seq[@intCast(it.producer_id)] = @intCast(it.seq);
     }
 
     // Check completeness: each bitset must have all bits set in [0, N)
