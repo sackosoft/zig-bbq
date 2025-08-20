@@ -1,112 +1,19 @@
 //! Copyright (c) 2025, Theodore Sackos, All rights reserved.
 //! SPDX-License-Identifier: MIT
 //!
-//! An implementation of the BBQ lock-free ring buffer described in the paper "BBQ: A Lock-Free Ring Buffer for
-//! High-Performance Data Transfer"
+//! An implementation of the BBQ lock-free ring buffer described in the paper
+//! "BBQ: A Lock-Free Ring Buffer for High-Performance Data Transfer"
 //! https://www.usenix.org/system/files/atc22-wang-jiawei.pdf
 //! Citations from the paper appear in comments in the format `// <section> - "<quote>"`.
 
 const std = @import("std");
 const assert = std.debug.assert;
-const print = std.debug.print;
-const atomic = std.atomic;
 
 // 4.1 - "Head and Cursor types are 64-bit integers, which can be atomically updated"
 // 4.1 - "We reserve two bit-segments in Head to represent the version and index"
 const Head = u64;
 // 4.1 - "We reserve [...] two bit-segments in Cursor to represent the version and offset"
 const Cursor = u64;
-
-const QVar = struct {
-    const Self = @This();
-
-    // Bitfield representation with masks/shifts; supports arbitrary sizes via wrap logic in nextHead.
-    cursor_offset_mask: u64,
-    head_index_mask: u64,
-    version_mask: u64,
-
-    cursor_version_shift: u6,
-    head_version_shift: u6,
-
-    // Keep actual sizes to enforce bounds and implement wrap when advancing head.
-    block_number: u64,
-    block_size: u64,
-
-    pub fn init(block_parameters: BlockOptions) Self {
-        assert(block_parameters.block_size >= 2);
-        assert(block_parameters.block_number >= 2);
-
-        // The paper describes using one bit as overflow protection, however, this does not adequately
-        // project from overflow in cases where the block size is small and number of producers is large.
-        // E.g. when block size = 4 and producers = 8, there is the possibility for the 0b011 offset to
-        // concurrently fetch and add by all producers, causing it to overflow and corrupt the version field.
-        // I don't think we can compute this value, since we cannot know how many producers or consumers will
-        // use the queue. I've added assertions which should detect this condition.
-        const cursor_offset_overflow_bits = 1;
-        const cursor_offset_bits = cursor_offset_overflow_bits + std.math.log2_int_ceil(u64, block_parameters.block_size);
-        const head_index_bits = std.math.log2_int_ceil(u64, block_parameters.block_number);
-        const version_bits = 64 - @max(cursor_offset_bits, head_index_bits);
-
-        assert(cursor_offset_bits > 0 and cursor_offset_bits <= std.math.maxInt(u6));
-        assert(head_index_bits > 0 and head_index_bits <= std.math.maxInt(u6));
-
-        const version_mask = (@as(u64, 1) << @as(u6, @intCast(version_bits))) - 1;
-        const cursor_offset_mask = (@as(u64, 1) << @as(u6, @intCast(cursor_offset_bits))) - 1;
-        const head_index_mask = (@as(u64, 1) << @as(u6, @intCast(head_index_bits))) - 1;
-
-        return .{
-            .cursor_offset_mask = cursor_offset_mask,
-            .head_index_mask = head_index_mask,
-            .version_mask = version_mask,
-
-            .cursor_version_shift = @intCast(cursor_offset_bits),
-            .head_version_shift = @intCast(head_index_bits),
-
-            .block_number = block_parameters.block_number,
-            .block_size = block_parameters.block_size,
-        };
-    }
-
-    fn getCursorOffset(self: QVar, cursor: Cursor) u64 {
-        return cursor & self.cursor_offset_mask;
-    }
-
-    fn getCursorVersion(self: QVar, cursor: Cursor) u64 {
-        return (cursor >> self.cursor_version_shift) & self.version_mask;
-    }
-
-    fn getHeadIndex(self: QVar, head: Head) u64 {
-        return head & self.head_index_mask;
-    }
-
-    fn getHeadVersion(self: QVar, head: Head) u64 {
-        return (head >> self.head_version_shift) & self.version_mask;
-    }
-
-    fn newHead(self: QVar, version: u64, index: u64) Head {
-        assert(index < self.block_number);
-        assert(index <= self.head_index_mask);
-        assert(version <= self.version_mask);
-        return ((version & self.version_mask) << self.head_version_shift) | (index & self.head_index_mask);
-    }
-
-    fn nextHead(self: QVar, head: Head) Head {
-        const ver = self.getHeadVersion(head);
-        const idx = self.getHeadIndex(head);
-        if (idx + 1 < self.block_number) {
-            return self.newHead(ver, idx + 1);
-        } else {
-            return self.newHead(ver + 1, 0);
-        }
-    }
-
-    fn newCursor(self: QVar, version: u64, offset: u64) Cursor {
-        assert(offset <= self.cursor_offset_mask);
-        assert(offset <= self.block_size);
-        assert(version <= self.version_mask);
-        return ((version & self.version_mask) << self.cursor_version_shift) | (offset & self.cursor_offset_mask);
-    }
-};
 
 pub const BlockOptions = struct {
     // 3.1 - "BBQ splits the ringbuffer into blocks, [...]. Each block contains one or more entries, usually multiple,
@@ -163,10 +70,6 @@ pub fn BBQ(comptime T: type) type {
             committed: Cursor,
             allocated: Cursor,
             entries: []T,
-
-            fn prettyPrint(self: *Block) void {
-                print("Block {{\n  index: {d},\n  consumed: {d} ({*})\n  reserved: {d} ({*})\n  committed: {d} ({*})\n  allocated: {d} ({*})\n  entries: {d}\n}}\n", .{ self.index, self.consumed, &self.consumed, self.reserved, &self.reserved, self.committed, &self.committed, self.allocated, &self.allocated, self.entries.len });
-            }
         };
 
         pub fn init(alloc: std.mem.Allocator, mode: FullHandlingMode, options: BlockOptions) !Self {
@@ -694,3 +597,95 @@ test "QVar nextHead wraps index and bumps version at end of block" {
         try std.testing.expectEqual(@as(u64, 0), qv.getHeadIndex(n_end));
     }
 }
+
+/// Used to perform operations on Head and Cursor [q]ueue [var]iables. BBQ queue variables
+/// each contain two fields. We use a single machine word to enable clean atomic operations;
+/// however, some bit manipulation is required to access the fields within the variable.
+const QVar = struct {
+    const Self = @This();
+
+    cursor_offset_mask: u64,
+    head_index_mask: u64,
+    version_mask: u64,
+
+    cursor_version_shift: u6,
+    head_version_shift: u6,
+
+    block_number: u64,
+    block_size: u64,
+
+    pub fn init(block_parameters: BlockOptions) Self {
+        assert(block_parameters.block_size >= 2);
+        assert(block_parameters.block_number >= 2);
+
+        // The paper describes using one bit as overflow protection, however, this does not adequately
+        // project from overflow in cases where the block size is small and number of producers is large.
+        // E.g. when block size = 4 and producers = 8, there is the possibility for the 0b011 offset to
+        // concurrently fetch and add by all producers, causing it to overflow and corrupt the version field.
+        // I don't think we can compute this value, since we cannot know how many producers or consumers will
+        // use the queue. I've added assertions which should detect this condition.
+        const cursor_offset_overflow_bits = 1;
+        const cursor_offset_bits = cursor_offset_overflow_bits + std.math.log2_int_ceil(u64, block_parameters.block_size);
+        const head_index_bits = std.math.log2_int_ceil(u64, block_parameters.block_number);
+        const version_bits = 64 - @max(cursor_offset_bits, head_index_bits);
+
+        assert(cursor_offset_bits > 0 and cursor_offset_bits <= std.math.maxInt(u6));
+        assert(head_index_bits > 0 and head_index_bits <= std.math.maxInt(u6));
+
+        const version_mask = (@as(u64, 1) << @as(u6, @intCast(version_bits))) - 1;
+        const cursor_offset_mask = (@as(u64, 1) << @as(u6, @intCast(cursor_offset_bits))) - 1;
+        const head_index_mask = (@as(u64, 1) << @as(u6, @intCast(head_index_bits))) - 1;
+
+        return .{
+            .cursor_offset_mask = cursor_offset_mask,
+            .head_index_mask = head_index_mask,
+            .version_mask = version_mask,
+
+            .cursor_version_shift = @intCast(cursor_offset_bits),
+            .head_version_shift = @intCast(head_index_bits),
+
+            .block_number = block_parameters.block_number,
+            .block_size = block_parameters.block_size,
+        };
+    }
+
+    fn getCursorOffset(self: QVar, cursor: Cursor) u64 {
+        return cursor & self.cursor_offset_mask;
+    }
+
+    fn getCursorVersion(self: QVar, cursor: Cursor) u64 {
+        return (cursor >> self.cursor_version_shift) & self.version_mask;
+    }
+
+    fn getHeadIndex(self: QVar, head: Head) u64 {
+        return head & self.head_index_mask;
+    }
+
+    fn getHeadVersion(self: QVar, head: Head) u64 {
+        return (head >> self.head_version_shift) & self.version_mask;
+    }
+
+    fn newHead(self: QVar, version: u64, index: u64) Head {
+        assert(index < self.block_number);
+        assert(index <= self.head_index_mask);
+        assert(version <= self.version_mask);
+        return ((version & self.version_mask) << self.head_version_shift) | (index & self.head_index_mask);
+    }
+
+    fn nextHead(self: QVar, head: Head) Head {
+        const ver = self.getHeadVersion(head);
+        const idx = self.getHeadIndex(head);
+        if (idx + 1 < self.block_number) {
+            return self.newHead(ver, idx + 1);
+        } else {
+            return self.newHead(ver + 1, 0);
+        }
+    }
+
+    fn newCursor(self: QVar, version: u64, offset: u64) Cursor {
+        assert(offset <= self.cursor_offset_mask);
+        assert(offset <= self.block_size);
+        assert(version <= self.version_mask);
+        return ((version & self.version_mask) << self.cursor_version_shift) | (offset & self.cursor_offset_mask);
+    }
+};
