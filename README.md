@@ -15,17 +15,27 @@ TODO: Add a visualization, diagram, or demo of BBQ in action.
 
 ## About
 
-`zig-bbq` is a pure Zig implementation of the [B]lock-based [B]ounded [Q]ueue (BBQ) algorithm; a lock-free ring buffer, designed
-for high-performance data transfer between threads. BBQ is suitable for both lossless (retry-new) and lossy (drop-old)
-producer-consumer scenarios, making it ideal for message passing, work distribution, profiling, tracing, and debugging.
+`zig-bbq` is implements the **B**lock-based **B**ounded **Q**ueue (BBQ) algorithm; a lock-free threadsafe ring buffer,
+designed for high-performance data transfer between threads. BBQ is suitable for both lossless ("retry-new") and
+lossy ("drop-old") producer-consumer scenarios, making it ideal for message passing, work distribution, profiling,
+tracing, and debugging.
 
 ## Features
 
-- **Lock-free**, **high-performance** ring buffer for concurrent producer-consumer scenarios.
-- **Configurable** capacity for performance tuning. The BBQ paper describes options to optimize for latency or throughput.
-- Two modes of operation:
+- **Lock-free** ring buffer for concurrent producer-consumer scenarios.
+- **Configurable** block count and block size to enable performance tuning.
+    - The paper describes a tradeoff between throughput and latency.
+- **Modes** of operation:
     - `RetryNewQueue`: lossless, blocks producers when full.
     - `DropOldQueue`: lossy, overwrites oldest unconsumed data when full.
+- **High-performance** "Our evaluation shows that
+BBQ outperforms several industrial ringbuffers. For example,
+in **single-producer/single-consumer micro-benchmarks, BBQ
+yields 11.3x to 42.4x higher throughput** than the ringbuffers
+from Linux kernel, DPDK, Boost, and Folly libraries. **In real
+world scenarios, BBQ achieves up to 1.5x, 50.5x, and 11.1x
+performance improvements** in benchmarks of DPDK, Linux
+io_uring, and Disruptor, respectively." Emphasis added, [BBQ - USENIX ATC 2022 - Jiawei Wang et al.](https://www.usenix.org/system/files/atc22-wang-jiawei.pdf)
 
 ## Zig Version
 
@@ -101,8 +111,6 @@ pub fn main() !void {
     std.debug.assert(expected == actual);
 }
 ```
-
-## API
 
 ## API Overview
 
