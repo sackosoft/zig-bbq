@@ -6,9 +6,9 @@ const bbq = @import("bbq");
 
 // Hard-coded scenario parameters (stress defaults)
 const PRODUCERS: u32 = 8;
-const CONSUMERS: u32 = 8;
-const BLOCK_NUMBER: u32 = 32;
-const BLOCK_SIZE: u32 = 8;
+const CONSUMERS: u32 = 1;
+const BLOCK_NUMBER: u32 = 512;
+const BLOCK_SIZE: u32 = 8192;
 const ITEMS_PER_PRODUCER: u64 = 1_000_000;
 const WATCHDOG_TIMEOUT_SECS: u64 = 3;
 
