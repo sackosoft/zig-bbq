@@ -9,11 +9,19 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
-// 4.1 - "Head and Cursor types are 64-bit integers, which can be atomically updated"
-// 4.1 - "We reserve two bit-segments in Head to represent the version and index"
-const Head = u64;
-// 4.1 - "We reserve [...] two bit-segments in Cursor to represent the version and offset"
-const Cursor = u64;
+/// Used in typical lossless producer-consumer scenarios such as message passing and work distribution.
+/// Implements a threadsafe circular buffer with first-in-first-out (FIFO) semantics where producers are
+/// blocked from inserting into the queue when the queue is full.
+pub fn RetryNewQueue(comptime T: type) type {
+    return BBQ(T, .retry_new);
+}
+
+/// Used in lossy producer-consumer scenarios such as profiling, tracing and debugging.
+/// Implements a threadsafe circular buffer with first-in-first-out (FIFO) semantics where producers are
+/// allowed to overwrite unconsumed data if the buffer is full.
+pub fn DropOldQueue(comptime T: type) type {
+    return BBQ(T, .drop_old);
+}
 
 pub const BlockOptions = struct {
     // 3.1 - "BBQ splits the ringbuffer into blocks, [...]. Each block contains one or more entries, usually multiple,
@@ -21,26 +29,6 @@ pub const BlockOptions = struct {
     block_number: u32,
     block_size: u32,
 };
-
-pub const FullHandlingMode = enum {
-    /// When the queue is full, the enqueue operation will return an error without mutating the queue.
-    // 1 - "Retry-new is the typical producer-consumer mode for message passing and work distribution scenarios."
-    retry_new,
-
-    /// When the queue is full, the enqueue operation will overwrite the oldest entry in the queue. That overwritten
-    /// entry will not be consumed by any consumer.
-    // 1 - "drop-old is a lossy/overwrite mode for profiling/tracing [5,24] and debugging [44] scenar ios, in
-    //     which producers may overwrite unconsumed data if the buffer is full"
-    drop_old,
-};
-
-pub fn RetryNewQueue(comptime T: type) type {
-    return BBQ(T, .retry_new);
-}
-
-pub fn DropOldQueue(comptime T: type) type {
-    return BBQ(T, .drop_old);
-}
 
 fn BBQ(comptime T: type, comptime mode: FullHandlingMode) type {
     return struct {
@@ -130,6 +118,27 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode) type {
             }
         }
 
+        pub fn dequeue(self: *Self) error{ Empty, Busy }!T {
+            var reserved_version: u64 = 0;
+            while (true) {
+                const head, const block = self.getConsumerHead();
+
+                const entry_description = self.reserveEntry(block, &reserved_version) catch |e| switch (e) {
+                    error.NoEntry => return error.Empty,
+                    error.NotAvailable => return error.Busy,
+                    error.BlockDone => {
+                        if (self.advanceConsumerHead(head, reserved_version)) continue else return error.Empty;
+                    },
+                };
+
+                if (self.consumeEntry(entry_description)) |data| {
+                    return data;
+                } else {
+                    continue;
+                }
+            }
+        }
+
         fn getProducerHead(self: *Self) struct { Head, *Block } {
             const head = @atomicLoad(Head, &self.p_head, .seq_cst);
             const block = &self.blocks[self.qvar.getHeadIndex(head)];
@@ -214,27 +223,6 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode) type {
 
             if (committed_version == head_version and committed_offset != self.options.block_size) {
                 return error.NotAvailable;
-            }
-        }
-
-        pub fn dequeue(self: *Self) error{ Empty, Busy }!T {
-            var reserved_version: u64 = 0;
-            while (true) {
-                const head, const block = self.getConsumerHead();
-
-                const entry_description = self.reserveEntry(block, &reserved_version) catch |e| switch (e) {
-                    error.NoEntry => return error.Empty,
-                    error.NotAvailable => return error.Busy,
-                    error.BlockDone => {
-                        if (self.advanceConsumerHead(head, reserved_version)) continue else return error.Empty;
-                    },
-                };
-
-                if (self.consumeEntry(entry_description)) |data| {
-                    return data;
-                } else {
-                    continue;
-                }
             }
         }
 
@@ -340,7 +328,7 @@ test "BBQ (retry-new) enqueues fill the queue then return an error indicating th
     const T = u8;
     const options = BlockOptions{ .block_number = 4, .block_size = 2 };
 
-    var bbq = try BBQ(T).init(std.testing.allocator, .retry_new, options);
+    var bbq = try RetryNewQueue(T).init(std.testing.allocator, options);
     defer bbq.deinit();
 
     for (0..(options.block_number * options.block_size)) |i| {
@@ -354,7 +342,7 @@ test "BBQ (drop-old) enqueues fill the queue then overwrite the oldest entry" {
     const T = u8;
     const options = BlockOptions{ .block_number = 4, .block_size = 2 };
 
-    var bbq = try BBQ(T).init(std.testing.allocator, .drop_old, options);
+    var bbq = try DropOldQueue(T).init(std.testing.allocator, options);
     defer bbq.deinit();
 
     const additional_overwrites: u32 = 100;
@@ -367,7 +355,7 @@ test "BBQ (retry-new) basic enqueue/dequeue FIFO and Empty after drain" {
     const T = u32;
     const options = BlockOptions{ .block_number = 4, .block_size = 2 }; // capacity = 8
 
-    var bbq = try BBQ(T).init(std.testing.allocator, .retry_new, options);
+    var bbq = try RetryNewQueue(T).init(std.testing.allocator, options);
     defer bbq.deinit();
 
     try bbq.enqueue(10);
@@ -385,7 +373,7 @@ test "BBQ (retry-new) fill exactly, then dequeue all in order and then Empty" {
     const T = u16;
     const options = BlockOptions{ .block_number = 4, .block_size = 2 }; // capacity = 8
 
-    var bbq = try BBQ(T).init(std.testing.allocator, .retry_new, options);
+    var bbq = try RetryNewQueue(T).init(std.testing.allocator, options);
     defer bbq.deinit();
 
     const cap: usize = options.block_number * options.block_size;
@@ -403,7 +391,7 @@ test "BBQ (drop-old) overwrites oldest; dequeue returns a contiguous suffix endi
     const T = u32;
     const options = BlockOptions{ .block_number = 4, .block_size = 2 }; // capacity = 8
 
-    var bbq = try BBQ(T).init(std.testing.allocator, .drop_old, options);
+    var bbq = try DropOldQueue(T).init(std.testing.allocator, options);
     defer bbq.deinit();
 
     const cap: usize = options.block_number * options.block_size;
@@ -434,7 +422,7 @@ test "BBQ (drop-old) interleave dequeues and ensure window behavior" {
     const T = u8;
     const options = BlockOptions{ .block_number = 4, .block_size = 2 }; // capacity = 8
 
-    var bbq = try BBQ(T).init(std.testing.allocator, .drop_old, options);
+    var bbq = try DropOldQueue(T).init(std.testing.allocator, options);
     defer bbq.deinit();
 
     // Enqueue 4 items
@@ -460,7 +448,7 @@ test "BBQ supports non-power-of-two sizes (retry-new): 3 blocks x 3 entries" {
     const T = u16;
     const options = BlockOptions{ .block_number = 3, .block_size = 3 }; // capacity = 9 (non-power-of-two)
 
-    var bbq = try BBQ(T).init(std.testing.allocator, .retry_new, options);
+    var bbq = try RetryNewQueue(T).init(std.testing.allocator, options);
     defer bbq.deinit();
 
     const cap: usize = options.block_number * options.block_size; // 9
@@ -481,7 +469,7 @@ test "BBQ supports non-power-of-two sizes (drop-old): 3 blocks x 3 entries with 
     const T = u32;
     const options = BlockOptions{ .block_number = 3, .block_size = 3 }; // capacity = 9 (non-power-of-two)
 
-    var bbq = try BBQ(T).init(std.testing.allocator, .drop_old, options);
+    var bbq = try DropOldQueue(T).init(std.testing.allocator, options);
     defer bbq.deinit();
 
     const cap: usize = options.block_number * options.block_size; // 9
@@ -512,7 +500,7 @@ test "BBQ with 3 blocks exposes old mask bug: interleave enq/deq works" {
     const T = u8;
     const options = BlockOptions{ .block_number = 3, .block_size = 2 }; // capacity = 6; 3 is non-power-of-two
 
-    var bbq = try BBQ(T).init(std.testing.allocator, .drop_old, options);
+    var bbq = try DropOldQueue(T).init(std.testing.allocator, options);
     defer bbq.deinit();
 
     // Initial enqueues
@@ -620,7 +608,7 @@ const QVar = struct {
     block_number: u64,
     block_size: u64,
 
-    pub fn init(block_parameters: BlockOptions) Self {
+    fn init(block_parameters: BlockOptions) Self {
         assert(block_parameters.block_size >= 2);
         assert(block_parameters.block_number >= 2);
 
@@ -694,4 +682,22 @@ const QVar = struct {
         assert(version <= self.version_mask);
         return ((version & self.version_mask) << self.cursor_version_shift) | (offset & self.cursor_offset_mask);
     }
+};
+
+// 4.1 - "Head and Cursor types are 64-bit integers, which can be atomically updated"
+// 4.1 - "We reserve two bit-segments in Head to represent the version and index"
+const Head = u64;
+// 4.1 - "We reserve [...] two bit-segments in Cursor to represent the version and offset"
+const Cursor = u64;
+
+const FullHandlingMode = enum {
+    /// When the queue is full, the enqueue operation will return an error without mutating the queue.
+    // 1 - "Retry-new is the typical producer-consumer mode for message passing and work distribution scenarios."
+    retry_new,
+
+    /// When the queue is full, the enqueue operation will overwrite the oldest entry in the queue. That overwritten
+    /// entry will not be consumed by any consumer.
+    // 1 - "drop-old is a lossy/overwrite mode for profiling/tracing [5,24] and debugging [44] scenar ios, in
+    //     which producers may overwrite unconsumed data if the buffer is full"
+    drop_old,
 };
