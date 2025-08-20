@@ -20,26 +20,27 @@ designed for high-performance data transfer between threads. BBQ is suitable for
 lossy ("drop-old") producer-consumer scenarios, making it ideal for message passing, work distribution, profiling,
 tracing, and debugging.
 
+
 ## Features
 
-- **Lock-free** ring buffer for concurrent producer-consumer scenarios.
-- **Configurable** block count and block size to enable performance tuning.
+- 🔓 **Lock-free** ring buffer for concurrent producer-consumer scenarios.
+- 📄 **Configurable** block count and block size to enable performance tuning.
     - The paper describes a tradeoff between throughput and latency.
-- **Modes** of operation:
+- 🔀 **Two Modes** of operation:
     - `RetryNewQueue`: lossless, blocks producers when full.
     - `DropOldQueue`: lossy, overwrites oldest unconsumed data when full.
-- **High-performance** "Our evaluation shows that
-BBQ outperforms several industrial ringbuffers. For example,
-in **single-producer/single-consumer micro-benchmarks, BBQ
-yields 11.3x to 42.4x higher throughput** than the ringbuffers
-from Linux kernel, DPDK, Boost, and Folly libraries. **In real
-world scenarios, BBQ achieves up to 1.5x, 50.5x, and 11.1x
-performance improvements** in benchmarks of DPDK, Linux
-io_uring, and Disruptor, respectively." Emphasis added, [BBQ - USENIX ATC 2022 - Jiawei Wang et al.](https://www.usenix.org/system/files/atc22-wang-jiawei.pdf)
+- ⚡ **High-performance** demonstrated across a range of benchmarks
+    - "In **single-producer/single-consumer micro-benchmarks, BBQ yields 11.3x to 42.4x higher throughput** than
+      the ringbuffers from Linux kernel, DPDK, Boost, and Folly libraries."
+    - "In **real world scenarios, BBQ achieves up to 1.5x, 50.5x, and 11.1x performance improvements** in
+       benchmarks of DPDK, Linux io_uring, and Disruptor, respectively."
+    - Emphasis added, [BBQ - USENIX ATC 2022 - Jiawei Wang et al.](https://www.usenix.org/system/files/atc22-wang-jiawei.pdf)
+
 
 ## Zig Version
 
 The `main` branch targets the latest stable Zig release (currently `0.14.1`).
+
 
 ## Installation
 
@@ -87,6 +88,7 @@ pub fn main() !void {
 
 ```
 
+
 ## Example Usage
 
 `zig-bbq` is thread-safe and can be safely used by multiple producers and multiple consumers
@@ -112,6 +114,7 @@ pub fn main() !void {
 }
 ```
 
+
 ## API Overview
 
 | Symbol(s)                | Description                                                                  |
@@ -124,13 +127,18 @@ pub fn main() !void {
 | `.deinit()`              | Free resources                                                               |
 | `BlockOptions`           | Set block count and block size                                               |
 
+
 ## Credits
 
-This implementation is based on the BBQ algorithm described in the USENIX ATC 2022 paper by
-Jiawei Wang et al.
+This implementation is based on the BBQ (Block-based Bounded Queue) algorithm described in the research paper:
 
-> **BBQ: A Block-based Bounded Queue for Exchanging Data and Profiling**  
+> **"BBQ: A Block-based Bounded Queue for Exchanging Data and Profiling"**  
 > Jiawei Wang, Diogo Behrens, Ming Fu, Lilith Oberhauser, Jonas Oberhauser, Jitang Lei, Geng Chen, Hermann Härtig, Haibo Chen  
-> [USENIX ATC 2022](https://www.usenix.org/conference/atc22/presentation/wang-jiawei)
+> USENIX Annual Technical Conference (ATC) 2022  
+> [USENIX ATC 2022](https://www.usenix.org/system/files/atc22-wang-jiawei.pdf)
 
-The author of `zig-bbq` has no affiliation with the paper or its authors.
+**Important:** This `zig-bbq` implementation is an independent work by Theodore Sackos. The author has no affiliation with
+the original research paper or its authors. All rights to the original research paper, algorithm design remain with the
+original authors and USENIX.
+
+This implementation is provided under the MIT license and covers only the source code contained in this repository.

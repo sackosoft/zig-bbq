@@ -1,9 +1,15 @@
 //! Copyright (c) 2025, Theodore Sackos, All rights reserved.
 //! SPDX-License-Identifier: MIT
 //!
-//! An implementation of the BBQ lock-free ring buffer described in the paper
-//! "BBQ: A Lock-Free Ring Buffer for High-Performance Data Transfer"
+//! This implementation is motivated by and based upon the algorithm described in:
+//! "BBQ: A Block-based Bounded Queue for Exchanging Data and Profiling" 
+//! by Jiawei Wang et al., USENIX ATC 2022
 //! https://www.usenix.org/system/files/atc22-wang-jiawei.pdf
+//!
+//! No claim is made to the research paper or the algorithm described therein.
+//! All rights to the original research paper and algorithm remain with the
+//! original authors and publishers.
+//! 
 //! Citations from the paper appear in comments in the format `// <section> - "<quote>"`.
 
 const std = @import("std");
