@@ -15,7 +15,7 @@ TODO: Add a visualization, diagram, or demo of BBQ in action.
 
 ## About
 
-`zig-bbq` is implements the **B**lock-based **B**ounded **Q**ueue (BBQ) algorithm; a lock-free threadsafe ring buffer,
+`zig-bbq` implements the **B**lock-based **B**ounded **Q**ueue (BBQ) algorithm; a lock-free threadsafe ring buffer,
 designed for high-performance data transfer between threads. BBQ is suitable for both lossless ("retry-new") and
 lossy ("drop-old") producer-consumer scenarios, making it ideal for message passing, work distribution, profiling,
 tracing, and debugging.
