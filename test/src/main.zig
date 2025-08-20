@@ -4,12 +4,6 @@
 const std = @import("std");
 const bbq = @import("bbq");
 
-// Hard-coded scenario parameters (stress defaults)
-const PRODUCERS: u32 = 8;
-const CONSUMERS: u32 = 1;
-const BLOCK_NUMBER: u32 = 512;
-const BLOCK_SIZE: u32 = 8192;
-const ITEMS_PER_PRODUCER: u64 = 1_000_000;
 const WATCHDOG_TIMEOUT_SECS: u64 = 3;
 
 const Item = struct {
@@ -26,12 +20,58 @@ fn checksum(producer_id: u32, seq: u64) u64 {
 }
 
 pub fn main() !void {
+    // SPSC
+    try run_regression_test(.{
+        .producers = 1,
+        .consumers = 1,
+        .items_per_producer = 1_000_000,
+        .block_number = 512,
+        .block_size = 4096,
+    });
+
+    // MPSC
+    try run_regression_test(.{
+        .producers = 4,
+        .consumers = 1,
+        .items_per_producer = 1_000_000,
+        .block_number = 128,
+        .block_size = 4,
+    });
+
+    // SPMC
+    try run_regression_test(.{
+        .producers = 1,
+        .consumers = 4,
+        .items_per_producer = 1_000_000,
+        .block_number = 128,
+        .block_size = 4,
+    });
+
+    // MPMC
+    try run_regression_test(.{
+        .producers = 8,
+        .consumers = 8,
+        .items_per_producer = 1_000_000,
+        .block_number = 1024,
+        .block_size = 4096,
+    });
+}
+
+const RegressionTestOptions = struct {
+    producers: usize,
+    consumers: usize,
+    items_per_producer: u64,
+    block_number: u32,
+    block_size: u32,
+};
+
+pub fn run_regression_test(test_options: RegressionTestOptions) !void {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_state.deinit();
     const alloc = gpa_state.allocator();
 
     // Step 1: Ensure we can initialize and deinit the queue.
-    const options = bbq.BlockOptions{ .block_number = BLOCK_NUMBER, .block_size = BLOCK_SIZE };
+    const options = bbq.BlockOptions{ .block_number = test_options.block_number, .block_size = test_options.block_size };
     var q = try bbq.BBQ(Item).init(alloc, .retry_new, options);
     defer q.deinit();
 
@@ -43,12 +83,15 @@ pub fn main() !void {
     }
 
     // Scenario run
-    const P: usize = PRODUCERS;
-    const C: usize = CONSUMERS;
-    const N: u64 = ITEMS_PER_PRODUCER;
-    const CAP: usize = BLOCK_NUMBER * BLOCK_SIZE;
+    const P: usize = test_options.producers;
+    const C: usize = test_options.consumers;
+    const N: u64 = test_options.items_per_producer;
+    const CAP: usize = test_options.block_number * test_options.block_size;
 
-    std.debug.print("Starting stress: P={d}, C={d}, capacity={d}, N={d}\n", .{ P, C, CAP, N });
+    std.debug.print(
+        "Starting stress: P={d}, C={d}, BLOCKS={d}, BLOCK_SIZE={d}, capacity={d}, N={d}\n",
+        .{ P, C, test_options.block_number, test_options.block_size, CAP, N, },
+        );
 
     // Shared counters (plain ints with atomic builtins)
     var deq_ok: usize = 0;
@@ -224,8 +267,10 @@ pub fn main() !void {
     var fifo_detail: struct { pid: u32, last: i64, cur: i64, pos: usize } = .{ .pid = 0, .last = 0, .cur = 0, .pos = 0 };
 
     for (consumer_logs) |*lst| {
-        var last_seq: [P]i64 = undefined;
-        @memset(&last_seq, -1);
+        var last_seq: []i64 = try alloc.alloc(i64, P);
+        defer alloc.free(last_seq);
+        @memset(last_seq, -1);
+
         for (lst.items, 0..) |it, pos| {
             // Ensure items are FIFO
             const pid: usize = @intCast(it.producer_id);
