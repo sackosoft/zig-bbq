@@ -2,33 +2,42 @@
 //! SPDX-License-Identifier: MIT
 //!
 //! This implementation is motivated by and based upon the algorithm described in:
-//! "BBQ: A Block-based Bounded Queue for Exchanging Data and Profiling" 
+//! "BBQ: A Block-based Bounded Queue for Exchanging Data and Profiling"
 //! by Jiawei Wang et al., USENIX ATC 2022
 //! https://www.usenix.org/system/files/atc22-wang-jiawei.pdf
 //!
 //! No claim is made to the research paper or the algorithm described therein.
 //! All rights to the original research paper and algorithm remain with the
 //! original authors and publishers.
-//! 
+//!
 //! Citations from the paper appear in comments in the format `// <section> - "<quote>"`.
 
 const std = @import("std");
 const assert = std.debug.assert;
 
-/// Used in typical lossless producer-consumer scenarios such as message passing and work distribution.
-/// Implements a threadsafe circular buffer with first-in-first-out (FIFO) semantics where producers are
+/// Used for lossless producer-consumer scenarios such as message passing and work distribution.
+/// Implements a threadsafe ring buffer with first-in-first-out (FIFO) semantics where producers are
 /// blocked from inserting into the queue when the queue is full.
 pub fn RetryNewQueue(comptime T: type) type {
     return BBQ(T, .retry_new);
 }
 
-/// Used in lossy producer-consumer scenarios such as profiling, tracing and debugging.
+/// Used for lossy producer-consumer scenarios such as profiling, tracing and debugging.
 /// Implements a threadsafe circular buffer with first-in-first-out (FIFO) semantics where producers are
 /// allowed to overwrite unconsumed data if the buffer is full.
 pub fn DropOldQueue(comptime T: type) type {
     return BBQ(T, .drop_old);
 }
 
+// 6.2.1 - "[There exists a] trade-off between number of entries and number of blocks;
+//          users have to be aware of that when choosing the buffer size and number of
+//          blocks. We use the following heuristic function to determine the number of
+//          blocks in all rest experiments: [number of blocks (log) = max(1, floor(number of entries (log) / 4))].
+// I've interpreted this to mean that a good heuristic is:
+//  block_number = max(
+//      2,
+//      2^(floor(log2(total_entries) / 4))
+//  )
 pub const BlockOptions = struct {
     // 3.1 - "BBQ splits the ringbuffer into blocks, [...]. Each block contains one or more entries, usually multiple,
     //       depending on the configuration."
