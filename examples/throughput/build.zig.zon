@@ -1,0 +1,16 @@
+.{
+    .name = .throughputtest,
+    .version = "0.0.0",
+    .fingerprint = 0x145783c621d03ddc,
+    .minimum_zig_version = "0.14.1",
+    .dependencies = .{
+        .bbq = .{
+            .path = "../..",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
