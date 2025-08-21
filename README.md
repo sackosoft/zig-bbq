@@ -24,6 +24,7 @@ tracing, and debugging.
 ## Features
 
 - 🔓 **Lock-free** ring buffer for concurrent producer-consumer scenarios.
+- 🚫 **Zero-dependencies** with property based stress tests and runtime assertions.
 - 📄 **Configurable** block count and block size to enable performance tuning.
     - The paper describes a tradeoff between throughput and latency.
 - 🔀 **Two Modes** of operation:
@@ -138,7 +139,7 @@ This implementation is based on the BBQ (Block-based Bounded Queue) algorithm de
 > [USENIX ATC 2022](https://www.usenix.org/system/files/atc22-wang-jiawei.pdf)
 
 **Important:** This `zig-bbq` implementation is an independent work by Theodore Sackos. The author has no affiliation with
-the original research paper or its authors. All rights to the original research paper, algorithm design remain with the
+the original research paper or its authors. All rights to the original research paper and algorithm design remain with the
 original authors and USENIX.
 
 This implementation is provided under the MIT license and covers only the source code contained in this repository.
