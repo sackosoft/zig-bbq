@@ -18,6 +18,14 @@ const assert = std.debug.assert;
 /// Used for lossless producer-consumer scenarios such as message passing and work distribution.
 /// Implements a threadsafe ring buffer with first-in-first-out (FIFO) semantics where producers are
 /// blocked from inserting into the queue when the queue is full.
+///
+/// Example:
+/// ```zig
+/// const T = ...;
+/// const allocator = ...;
+/// const queue = try RetryNewQueue(T).init(allocator, .{ .block_number = 4, .block_size = 16 });
+/// defer queue.deinit();
+/// ```
 pub fn RetryNewQueue(comptime T: type) type {
     return BBQ(T, .retry_new, EnqueueErrorRetryNew);
 }
@@ -25,6 +33,14 @@ pub fn RetryNewQueue(comptime T: type) type {
 /// Used for lossy producer-consumer scenarios such as profiling, tracing and debugging.
 /// Implements a threadsafe circular buffer with first-in-first-out (FIFO) semantics where producers are
 /// allowed to overwrite unconsumed data if the buffer is full.
+///
+/// Example:
+/// ```zig
+/// const T = ...;
+/// const allocator = ...;
+/// const queue = try DropOldQueue(T).init(allocator, .{ .block_number = 4, .block_size = 16 });
+/// defer queue.deinit();
+/// ```
 pub fn DropOldQueue(comptime T: type) type {
     return BBQ(T, .drop_old, EnqueueErrorDropOld);
 }
@@ -38,6 +54,10 @@ pub fn DropOldQueue(comptime T: type) type {
 //      2,
 //      2^(floor(log2(total_entries) / 4))
 //  )
+/// BlockOptions provides configuration options for the block-based queue.
+/// The total length of the queue is the product of `block_number * block_size`. The queue is split into `block_number` blocks
+/// with `block_size` entries in each block. This separation has been demonstrated to reduce contention between producers and
+/// consumers.
 pub const BlockOptions = struct {
     // 3.1 - "BBQ splits the ringbuffer into blocks, [...]. Each block contains one or more entries, usually multiple,
     //       depending on the configuration."
@@ -88,7 +108,7 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
             entries: []T,
         };
 
-        pub fn init(alloc: std.mem.Allocator, options: BlockOptions) !Self {
+        pub fn init(alloc: std.mem.Allocator, options: BlockOptions) std.mem.Allocator.Error!Self {
             assert(options.block_number > 1);
             assert(options.block_size > 1);
 
