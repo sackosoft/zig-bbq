@@ -90,8 +90,15 @@ pub fn run_regression_test(test_options: RegressionTestOptions) !void {
 
     std.debug.print(
         "Starting stress: P={d}, C={d}, BLOCKS={d}, BLOCK_SIZE={d}, capacity={d}, N={d}\n",
-        .{ P, C, test_options.block_number, test_options.block_size, CAP, N, },
-        );
+        .{
+            P,
+            C,
+            test_options.block_number,
+            test_options.block_size,
+            CAP,
+            N,
+        },
+    );
 
     // Shared counters (plain ints with atomic builtins)
     var deq_ok: usize = 0;
@@ -164,6 +171,7 @@ pub fn run_regression_test(test_options: RegressionTestOptions) !void {
                         error.Full, error.Busy => {
                             continue;
                         },
+                        else => @panic("Unable to enqueue due to unexpected error."),
                     };
                     // success
                     seq += 1;
@@ -189,6 +197,7 @@ pub fn run_regression_test(test_options: RegressionTestOptions) !void {
                         error.Empty, error.Busy => {
                             continue;
                         },
+                        else => @panic("Unable to dequeue due to unexpected error."),
                     };
                     _ = @atomicRmw(usize, deq_count_ptr, .Add, 1, .acq_rel);
                     _ = @atomicRmw(u64, progress_ptr, .Add, 1, .acq_rel);

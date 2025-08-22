@@ -87,6 +87,7 @@ pub fn run_throughput_test(test_options: RegressionTestOptions) !void {
                         error.Full, error.Busy => {
                             continue;
                         },
+                        else => @panic("Unable to enqueue due to unexpected error."),
                     };
 
                     // success
@@ -114,6 +115,7 @@ pub fn run_throughput_test(test_options: RegressionTestOptions) !void {
                         error.Empty, error.Busy => {
                             continue;
                         },
+                        else => @panic("Unable to dequeue due to unexpected error."),
                     };
                     local_sum += @as(u64, it.seq);
                     _ = @atomicRmw(usize, deq_count_ptr, .Add, 1, .acq_rel);

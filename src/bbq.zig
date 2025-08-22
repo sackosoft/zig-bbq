@@ -19,14 +19,14 @@ const assert = std.debug.assert;
 /// Implements a threadsafe ring buffer with first-in-first-out (FIFO) semantics where producers are
 /// blocked from inserting into the queue when the queue is full.
 pub fn RetryNewQueue(comptime T: type) type {
-    return BBQ(T, .retry_new);
+    return BBQ(T, .retry_new, EnqueueErrorRetryNew);
 }
 
 /// Used for lossy producer-consumer scenarios such as profiling, tracing and debugging.
 /// Implements a threadsafe circular buffer with first-in-first-out (FIFO) semantics where producers are
 /// allowed to overwrite unconsumed data if the buffer is full.
 pub fn DropOldQueue(comptime T: type) type {
-    return BBQ(T, .drop_old);
+    return BBQ(T, .drop_old, EnqueueErrorDropOld);
 }
 
 // 6.2.1 - "[There exists a] trade-off between number of entries and number of blocks;
@@ -45,7 +45,13 @@ pub const BlockOptions = struct {
     block_size: u32,
 };
 
-fn BBQ(comptime T: type, comptime mode: FullHandlingMode) type {
+const MaxOperationAttempts: u32 = 128;
+pub const CommonErrors = error{ Busy, AttemptsExhausted };
+pub const EnqueueErrorRetryNew = CommonErrors || error{Full};
+pub const EnqueueErrorDropOld = CommonErrors || error{};
+pub const DequeueError = CommonErrors || error{Empty};
+
+fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError: anytype) type {
     return struct {
         const Self = @This();
 
@@ -116,8 +122,8 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode) type {
             self.* = undefined;
         }
 
-        pub fn enqueue(self: *Self, data: T) error{ Full, Busy }!void {
-            while (true) {
+        pub fn enqueue(self: *Self, data: T) EnqueueError!void {
+            for (0..MaxOperationAttempts) |_| {
                 const head, const block = self.getProducerHead();
 
                 if (self.allocateEntry(block)) |entry_descriptor| {
@@ -125,22 +131,26 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode) type {
                     return;
                 } else {
                     self.advanceProducerHead(head) catch |e| switch (e) {
-                        error.NoEntry => return error.Full,
+                        error.NoEntry => return if (mode == .retry_new) error.Full else unreachable,
                         error.NotAvailable => return error.Busy,
                     };
                     continue;
                 }
             }
+
+            return error.AttemptsExhausted;
         }
 
-        pub fn dequeue(self: *Self) error{ Empty, Busy }!T {
+        pub fn dequeue(self: *Self) DequeueError!T {
             var reserved_version: u64 = 0;
-            while (true) {
+
+            for (0..MaxOperationAttempts) |_| {
                 const head, const block = self.getConsumerHead();
 
                 const entry_description = self.reserveEntry(block, &reserved_version) catch |e| switch (e) {
                     error.NoEntry => return error.Empty,
                     error.NotAvailable => return error.Busy,
+                    error.AttemptsExhausted => return error.Busy,
                     error.BlockDone => {
                         if (self.advanceConsumerHead(head, reserved_version)) continue else return error.Empty;
                     },
@@ -152,6 +162,8 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode) type {
                     continue;
                 }
             }
+
+            return error.AttemptsExhausted;
         }
 
         fn getProducerHead(self: *Self) struct { Head, *Block } {
@@ -247,8 +259,10 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode) type {
             return .{ head, block };
         }
 
-        fn reserveEntry(self: *Self, block: *Block, out_reserved_version: *u64) error{ NoEntry, NotAvailable, BlockDone }!EntryDesc {
-            while (true) {
+        fn reserveEntry(self: *Self, block: *Block, out_reserved_version: *u64) error{ NoEntry, NotAvailable, BlockDone, AttemptsExhausted }!EntryDesc {
+            // Avoiding using MaxOperationAttempts since that value may increase in the future which may introduce
+            // a case of "accidentally quadratic" runtime.
+            for (0..32) |_| {
                 const reserved = @atomicLoad(Cursor, &block.reserved, .seq_cst);
                 const reserved_version = self.qvar.getCursorVersion(reserved);
                 const reserved_offset = self.qvar.getCursorOffset(reserved);
@@ -283,6 +297,8 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode) type {
                 out_reserved_version.* = reserved_version;
                 return error.BlockDone;
             }
+
+            return error.AttemptsExhausted;
         }
 
         fn consumeEntry(self: *Self, entry_descriptor: EntryDesc) ?T {
