@@ -170,9 +170,8 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         pub fn dequeue(self: *Self) DequeueError!T {
-            var reserved_version: u64 = 0;
-
             for (0..MaxOperationAttempts) |_| {
+                var reserved_version: ?u64 = null;
                 const head, const block = self.getConsumerHead();
 
                 const entry_description = self.reserveEntry(block, &reserved_version) catch |e| switch (e) {
@@ -180,7 +179,8 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
                     error.NotAvailable => return error.Busy,
                     error.AttemptsExhausted => return error.Busy,
                     error.BlockDone => {
-                        if (self.advanceConsumerHead(head, reserved_version)) continue else return error.Empty;
+                        assert(reserved_version != null);
+                        if (self.advanceConsumerHead(head, reserved_version.?)) continue else return error.Empty;
                     },
                 };
 
@@ -287,7 +287,9 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
             return .{ head, block };
         }
 
-        fn reserveEntry(self: *Self, block: *Block, out_reserved_version: *u64) error{ NoEntry, NotAvailable, BlockDone, AttemptsExhausted }!EntryDesc {
+        fn reserveEntry(self: *Self, block: *Block, out_reserved_version: *?u64) error{ NoEntry, NotAvailable, BlockDone, AttemptsExhausted }!EntryDesc {
+            assert(out_reserved_version.* == null);
+
             // Avoiding using MaxOperationAttempts since that value may increase in the future which may introduce
             // a case of "accidentally quadratic" runtime.
             for (0..32) |_| {
@@ -299,6 +301,7 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
 
                     const committed = @atomicLoad(Cursor, &block.committed, .seq_cst);
                     const committed_offset = self.qvar.getCursorOffset(committed);
+                    assert(reserved <= committed);
                     if (reserved_offset == committed_offset) {
                         return error.NoEntry;
                     }
@@ -306,6 +309,7 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
                     if (committed_offset != self.options.block_size) {
                         const allocated = @atomicLoad(Cursor, &block.allocated, .seq_cst);
                         const allocated_offset = self.qvar.getCursorOffset(allocated);
+                        assert(committed <= allocated);
                         if (allocated_offset != committed_offset) {
                             return error.NotAvailable;
                         }
@@ -341,6 +345,7 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
                 .drop_old => {
                     const allocated = @atomicLoad(Cursor, &entry_descriptor.block.allocated, .seq_cst);
                     const allocated_version = self.qvar.getCursorVersion(allocated);
+                    assert(allocated_version >= entry_descriptor.version);
 
                     // In the drop-old mode, the producer may have overwritten the entry after we started to handle it, in this case
                     // we return null to indicate that the entry is no longer valid and the consumer will move on.
