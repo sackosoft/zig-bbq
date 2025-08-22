@@ -132,6 +132,7 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
                     .allocated = initial_cursor,
                     .entries = data[i * options.block_size .. (i + 1) * options.block_size],
                 };
+                assert(blocks[i].entries.len == options.block_size);
             }
 
             return .{
@@ -145,6 +146,7 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         pub fn deinit(self: *Self) void {
+            assert(self.blocks.len == self.options.block_number);
             self._allocator_used_for_deinit_only.free(self.blocks);
             self._allocator_used_for_deinit_only.free(self.data);
             self.* = undefined;
@@ -155,6 +157,7 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
                 const head, const block = self.getProducerHead();
 
                 if (self.allocateEntry(block)) |entry_descriptor| {
+                    assert(entry_descriptor.block == block);
                     commitEntry(entry_descriptor, data);
                     return;
                 } else {
@@ -218,6 +221,7 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
             // as per the paper's description of unspecified fields being set to zero.
             const old_version = self.qvar.getCursorVersion(old);
 
+            assert(old_offset < self.options.block_size);
             return .{
                 .version = old_version,
                 .offset = old_offset,
