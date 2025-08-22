@@ -19,6 +19,10 @@ const assert = std.debug.assert;
 /// Implements a threadsafe ring buffer with first-in-first-out (FIFO) semantics where producers are
 /// blocked from inserting into the queue when the queue is full.
 ///
+/// Performance characteristics:
+/// - All memory allocation happens inside `init()`.
+/// - Zero allocations inside `enqueue()` and `dequeue()`.
+///
 /// Example:
 /// ```zig
 /// const T = ...;
@@ -33,6 +37,10 @@ pub fn RetryNewQueue(comptime T: type) type {
 /// Used for lossy producer-consumer scenarios such as profiling, tracing and debugging.
 /// Implements a threadsafe circular buffer with first-in-first-out (FIFO) semantics where producers are
 /// allowed to overwrite unconsumed data if the buffer is full.
+///
+/// Performance characteristics:
+/// - All memory allocation happens inside `init()`.
+/// - Zero allocations inside `enqueue()` and `dequeue()`.
 ///
 /// Example:
 /// ```zig
@@ -86,7 +94,7 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         p_head: Head = 0,
         c_head: Head = 0,
 
-        alloc: std.mem.Allocator,
+        _allocator_used_for_deinit_only: std.mem.Allocator,
         qvar: QVar,
         options: BlockOptions,
 
@@ -127,7 +135,7 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
             }
 
             return .{
-                .alloc = alloc,
+                ._allocator_used_for_deinit_only = alloc,
                 .qvar = QVar.init(options),
                 .options = options,
 
@@ -137,8 +145,8 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         pub fn deinit(self: *Self) void {
-            self.alloc.free(self.blocks);
-            self.alloc.free(self.data);
+            self._allocator_used_for_deinit_only.free(self.blocks);
+            self._allocator_used_for_deinit_only.free(self.data);
             self.* = undefined;
         }
 
