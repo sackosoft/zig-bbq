@@ -15,9 +15,9 @@ pub fn main() !void {
     try run_throughput_test(.{
         .producers = 8,
         .consumers = 1,
-        .items_per_producer = 1_000_000,
-        .block_number = 128,
-        .block_size = 2048,
+        .items_per_producer = 100_000,
+        .block_number = 32,
+        .block_size = 512,
     });
 }
 

@@ -15,6 +15,8 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
+const tracy = @import("tracy");
+
 /// Used for lossless producer-consumer scenarios such as message passing and work distribution.
 /// Implements a threadsafe ring buffer with first-in-first-out (FIFO) semantics where producers are
 /// blocked from inserting into the queue when the queue is full.
@@ -153,6 +155,8 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         pub fn enqueue(self: *Self, data: T) EnqueueError!void {
+            tracy.frameMarkNamed("enqueue()");
+
             for (0..MaxOperationAttempts) |_| {
                 const head, const block = self.getProducerHead();
 
@@ -173,6 +177,8 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         pub fn dequeue(self: *Self) DequeueError!T {
+            tracy.frameMarkNamed("dequeue()");
+
             for (0..MaxOperationAttempts) |_| {
                 var reserved_version: ?u64 = null;
                 const head, const block = self.getConsumerHead();
@@ -198,12 +204,18 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         fn getProducerHead(self: *Self) struct { Head, *Block } {
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
             const head = @atomicLoad(Head, &self.p_head, .seq_cst);
             const block = &self.blocks[self.qvar.getHeadIndex(head)];
             return .{ head, block };
         }
 
         fn allocateEntry(self: *Self, block: *Block) ?EntryDesc {
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
             const allocated = @atomicLoad(Cursor, &block.allocated, .seq_cst);
             const allocated_offset = self.qvar.getCursorOffset(allocated);
             if (allocated_offset >= self.options.block_size) {
@@ -230,12 +242,18 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         fn commitEntry(entry_descriptor: EntryDesc, data: T) void {
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
             entry_descriptor.block.entries[entry_descriptor.offset] = data;
 
             _ = @atomicRmw(Cursor, &entry_descriptor.block.committed, .Add, 1, .seq_cst);
         }
 
         fn advanceProducerHead(self: *Self, head: Head) error{ NoEntry, NotAvailable }!void {
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
             const head_version = self.qvar.getHeadVersion(head);
 
             var next_block = &self.blocks[(self.qvar.getHeadIndex(head) + 1) % self.blocks.len];
@@ -254,6 +272,9 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         fn advanceProducerHeadRetryNew(self: *Self, head: Head, next_block: *Block) error{ NoEntry, NotAvailable }!void {
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
             const head_version = self.qvar.getHeadVersion(head);
             const consumed = @atomicLoad(Cursor, &next_block.consumed, .seq_cst);
 
@@ -273,6 +294,9 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         fn advanceProducerHeadDropOld(self: *Self, head: Head, next_block: *Block) error{ NoEntry, NotAvailable }!void {
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
             const head_version = self.qvar.getHeadVersion(head);
 
             const committed = @atomicLoad(Cursor, &next_block.committed, .seq_cst);
@@ -292,6 +316,9 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         fn reserveEntry(self: *Self, block: *Block, out_reserved_version: *?u64) error{ NoEntry, NotAvailable, BlockDone, AttemptsExhausted }!EntryDesc {
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
             assert(out_reserved_version.* == null);
 
             // Avoiding using MaxOperationAttempts since that value may increase in the future which may introduce
@@ -338,6 +365,9 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         fn consumeEntry(self: *Self, entry_descriptor: EntryDesc) ?T {
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
             const data = entry_descriptor.block.entries[entry_descriptor.offset];
 
             switch (mode) {
@@ -359,6 +389,9 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         fn advanceConsumerHead(self: *Self, head: Head, reserved_version: u64) bool {
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
             const head_version = self.qvar.getHeadVersion(head);
             const next_block = &self.blocks[(self.qvar.getHeadIndex(head) + 1) % self.blocks.len];
 
