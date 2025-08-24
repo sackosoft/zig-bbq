@@ -13,11 +13,11 @@ const Item = struct {
 
 pub fn main() !void {
     try run_throughput_test(.{
-        .producers = 8,
-        .consumers = 1,
-        .items_per_producer = 1_000_000,
-        .block_number = 128,
-        .block_size = 2048,
+        .producers = 2,
+        .consumers = 2,
+        .items_per_producer = 100_000,
+        .block_number = 32,
+        .block_size = 512,
     });
 }
 
@@ -79,12 +79,13 @@ pub fn run_throughput_test(test_options: RegressionTestOptions) !void {
     defer alloc.free(prod_threads);
     for (prod_threads, 0..) |*th, i| {
         th.* = try std.Thread.spawn(.{}, struct {
-            fn run(id: u32, queue_ptr: *bbq.RetryNewQueue(Item), num_items: u64) void {
+            fn run(id: u32, queue_ptr: *bbq.RetryNewQueue(Item), num_items: u64) !void {
                 var seq: u64 = 0;
                 while (seq < num_items) {
                     const it = Item{ .producer_id = id, .seq = seq };
                     queue_ptr.enqueue(it) catch |e| switch (e) {
                         error.Full, error.Busy => {
+                            try std.Thread.yield();
                             continue;
                         },
                         else => @panic("Unable to enqueue due to unexpected error."),

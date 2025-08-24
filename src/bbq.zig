@@ -15,6 +15,8 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
+const tracy = @import("tracy");
+
 /// Used for lossless producer-consumer scenarios such as message passing and work distribution.
 /// Implements a threadsafe ring buffer with first-in-first-out (FIFO) semantics where producers are
 /// blocked from inserting into the queue when the queue is full.
@@ -153,6 +155,10 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         pub fn enqueue(self: *Self, data: T) EnqueueError!void {
+            tracy.frameMarkNamed("enqueue()");
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
             for (0..MaxOperationAttempts) |_| {
                 const head, const block = self.getProducerHead();
 
@@ -173,6 +179,10 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         pub fn dequeue(self: *Self) DequeueError!T {
+            tracy.frameMarkNamed("dequeue()");
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
             for (0..MaxOperationAttempts) |_| {
                 var reserved_version: ?u64 = null;
                 const head, const block = self.getConsumerHead();
@@ -198,19 +208,25 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         fn getProducerHead(self: *Self) struct { Head, *Block } {
-            const head = @atomicLoad(Head, &self.p_head, .seq_cst);
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
+            const head = @atomicLoad(Head, &self.p_head, .monotonic);
             const block = &self.blocks[self.qvar.getHeadIndex(head)];
             return .{ head, block };
         }
 
         fn allocateEntry(self: *Self, block: *Block) ?EntryDesc {
-            const allocated = @atomicLoad(Cursor, &block.allocated, .seq_cst);
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
+            const allocated = @atomicLoad(Cursor, &block.allocated, .monotonic);
             const allocated_offset = self.qvar.getCursorOffset(allocated);
             if (allocated_offset >= self.options.block_size) {
                 return null;
             }
 
-            const old = @atomicRmw(Cursor, &block.allocated, .Add, 1, .seq_cst);
+            const old = @atomicRmw(Cursor, &block.allocated, .Add, 1, .monotonic);
             assert(self.qvar.getCursorVersion(old) == self.qvar.getCursorVersion(old + 1)); // ERROR: Version overflow detected. You may have too many producers and too small of a block size. If #producers exceeds `log2_ceil(block_size)` then you may hit this issue.
             const old_offset = self.qvar.getCursorOffset(old);
             if (old_offset >= self.options.block_size) {
@@ -230,12 +246,18 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         fn commitEntry(entry_descriptor: EntryDesc, data: T) void {
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
             entry_descriptor.block.entries[entry_descriptor.offset] = data;
 
-            _ = @atomicRmw(Cursor, &entry_descriptor.block.committed, .Add, 1, .seq_cst);
+            _ = @atomicRmw(Cursor, &entry_descriptor.block.committed, .Add, 1, .release);
         }
 
         fn advanceProducerHead(self: *Self, head: Head) error{ NoEntry, NotAvailable }!void {
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
             const head_version = self.qvar.getHeadVersion(head);
 
             var next_block = &self.blocks[(self.qvar.getHeadIndex(head) + 1) % self.blocks.len];
@@ -246,22 +268,25 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
             }
 
             const new_cursor = self.qvar.newCursor(head_version + 1, 0);
-            _ = @atomicRmw(Cursor, &next_block.committed, .Max, new_cursor, .seq_cst);
-            _ = @atomicRmw(Cursor, &next_block.allocated, .Max, new_cursor, .seq_cst);
+            _ = @atomicRmw(Cursor, &next_block.committed, .Max, new_cursor, .release);
+            _ = @atomicRmw(Cursor, &next_block.allocated, .Max, new_cursor, .monotonic);
 
             // 4.2.2 Order Matters - "updating cached heads (...) must happen after updating block-level variables (...), otherwise blocks may be fully skipped."
-            _ = @atomicRmw(Head, &self.p_head, .Max, self.qvar.nextHead(head), .seq_cst);
+            _ = @atomicRmw(Head, &self.p_head, .Max, self.qvar.nextHead(head), .monotonic);
         }
 
         fn advanceProducerHeadRetryNew(self: *Self, head: Head, next_block: *Block) error{ NoEntry, NotAvailable }!void {
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
             const head_version = self.qvar.getHeadVersion(head);
-            const consumed = @atomicLoad(Cursor, &next_block.consumed, .seq_cst);
+            const consumed = @atomicLoad(Cursor, &next_block.consumed, .acquire);
 
             const consumed_version = self.qvar.getCursorVersion(consumed);
             const consumed_offset = self.qvar.getCursorOffset(consumed);
 
             if (consumed_version < head_version or (consumed_version == head_version and consumed_offset != self.options.block_size)) {
-                const reserved = @atomicLoad(Cursor, &next_block.reserved, .seq_cst);
+                const reserved = @atomicLoad(Cursor, &next_block.reserved, .monotonic);
 
                 const reserved_offset = self.qvar.getCursorOffset(reserved);
                 if (reserved_offset == consumed_offset) {
@@ -273,9 +298,12 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         fn advanceProducerHeadDropOld(self: *Self, head: Head, next_block: *Block) error{ NoEntry, NotAvailable }!void {
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
             const head_version = self.qvar.getHeadVersion(head);
 
-            const committed = @atomicLoad(Cursor, &next_block.committed, .seq_cst);
+            const committed = @atomicLoad(Cursor, &next_block.committed, .monotonic);
 
             const committed_version = self.qvar.getCursorVersion(committed);
             const committed_offset = self.qvar.getCursorOffset(committed);
@@ -286,24 +314,30 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         fn getConsumerHead(self: *Self) struct { Head, *Block } {
-            const head = @atomicLoad(Head, &self.c_head, .seq_cst);
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
+            const head = @atomicLoad(Head, &self.c_head, .monotonic);
             const block = &self.blocks[self.qvar.getHeadIndex(head)];
             return .{ head, block };
         }
 
         fn reserveEntry(self: *Self, block: *Block, out_reserved_version: *?u64) error{ NoEntry, NotAvailable, BlockDone, AttemptsExhausted }!EntryDesc {
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
             assert(out_reserved_version.* == null);
 
             // Avoiding using MaxOperationAttempts since that value may increase in the future which may introduce
             // a case of "accidentally quadratic" runtime.
             for (0..32) |_| {
-                const reserved = @atomicLoad(Cursor, &block.reserved, .seq_cst);
+                const reserved = @atomicLoad(Cursor, &block.reserved, .monotonic);
                 const reserved_version = self.qvar.getCursorVersion(reserved);
                 const reserved_offset = self.qvar.getCursorOffset(reserved);
                 if (reserved_offset < self.options.block_size) {
                     assert(self.qvar.getCursorVersion(reserved + 1) == reserved_version); // ERROR: Version overflow detected. You may have too many producers and too small of a block size. If #producers exceeds `log2_ceil(block_size)` then you may hit this issue.
 
-                    const committed = @atomicLoad(Cursor, &block.committed, .seq_cst);
+                    const committed = @atomicLoad(Cursor, &block.committed, .acquire);
                     const committed_offset = self.qvar.getCursorOffset(committed);
                     assert(reserved <= committed);
                     if (reserved_offset == committed_offset) {
@@ -311,7 +345,7 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
                     }
 
                     if (committed_offset != self.options.block_size) {
-                        const allocated = @atomicLoad(Cursor, &block.allocated, .seq_cst);
+                        const allocated = @atomicLoad(Cursor, &block.allocated, .monotonic);
                         const allocated_offset = self.qvar.getCursorOffset(allocated);
                         assert(committed <= allocated);
                         if (allocated_offset != committed_offset) {
@@ -319,7 +353,7 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
                         }
                     }
 
-                    if (@atomicRmw(Cursor, &block.reserved, .Max, reserved + 1, .seq_cst) == reserved) {
+                    if (@atomicRmw(Cursor, &block.reserved, .Max, reserved + 1, .monotonic) == reserved) {
                         return .{
                             .block = block,
                             .offset = reserved_offset,
@@ -338,16 +372,19 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         fn consumeEntry(self: *Self, entry_descriptor: EntryDesc) ?T {
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
             const data = entry_descriptor.block.entries[entry_descriptor.offset];
 
             switch (mode) {
                 .retry_new => {
-                    const prev = @atomicRmw(Cursor, &entry_descriptor.block.consumed, .Add, 1, .seq_cst);
+                    const prev = @atomicRmw(Cursor, &entry_descriptor.block.consumed, .Add, 1, .monotonic);
                     assert(self.qvar.getCursorVersion(prev + 1) == self.qvar.getCursorVersion(prev)); // ERROR: Version overflow detected. You may have too many producers and too small of a block size. If #producers exceeds `log2_ceil(block_size)` then you may hit this issue.
                     return data;
                 },
                 .drop_old => {
-                    const allocated = @atomicLoad(Cursor, &entry_descriptor.block.allocated, .seq_cst);
+                    const allocated = @atomicLoad(Cursor, &entry_descriptor.block.allocated, .monotonic);
                     const allocated_version = self.qvar.getCursorVersion(allocated);
                     assert(allocated_version >= entry_descriptor.version);
 
@@ -359,10 +396,13 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
         }
 
         fn advanceConsumerHead(self: *Self, head: Head, reserved_version: u64) bool {
+            const ctx = tracy.trace(@src());
+            defer ctx.end();
+
             const head_version = self.qvar.getHeadVersion(head);
             const next_block = &self.blocks[(self.qvar.getHeadIndex(head) + 1) % self.blocks.len];
 
-            const committed = @atomicLoad(Cursor, &next_block.committed, .seq_cst);
+            const committed = @atomicLoad(Cursor, &next_block.committed, .acquire);
             const committed_version = self.qvar.getCursorVersion(committed);
 
             switch (mode) {
@@ -372,8 +412,8 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
                     }
 
                     const next_cursor = self.qvar.newCursor(head_version + 1, 0);
-                    _ = @atomicRmw(Cursor, &next_block.consumed, .Max, next_cursor, .seq_cst);
-                    _ = @atomicRmw(Cursor, &next_block.reserved, .Max, next_cursor, .seq_cst);
+                    _ = @atomicRmw(Cursor, &next_block.consumed, .Max, next_cursor, .release);
+                    _ = @atomicRmw(Cursor, &next_block.reserved, .Max, next_cursor, .monotonic);
                 },
                 .drop_old => {
                     const head_index = self.qvar.getHeadIndex(head);
@@ -382,11 +422,11 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
                     }
 
                     const next_cursor = self.qvar.newCursor(committed_version, 0);
-                    _ = @atomicRmw(Cursor, &next_block.reserved, .Max, next_cursor, .seq_cst);
+                    _ = @atomicRmw(Cursor, &next_block.reserved, .Max, next_cursor, .monotonic);
                 },
             }
 
-            _ = @atomicRmw(Head, &self.c_head, .Max, self.qvar.nextHead(head), .seq_cst);
+            _ = @atomicRmw(Head, &self.c_head, .Max, self.qvar.nextHead(head), .monotonic);
             return true;
         }
     };
