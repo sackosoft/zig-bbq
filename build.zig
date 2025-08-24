@@ -20,10 +20,4 @@ pub fn build(b: *std.Build) void {
     });
 
     b.installArtifact(bbq_lib);
-
-    const tracy_dep = b.dependency("tracy", .{
-        .tracy = true,
-        .@"tracy-callstack" = true,
-    });
-    bbq_module.addImport("tracy", tracy_dep.module("tracy"));
 }

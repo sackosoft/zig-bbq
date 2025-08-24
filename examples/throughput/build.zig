@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) void {
 
     const throughput_exe = b.addExecutable(.{
         .name = "bbq-throughput",
-        .linkage = .dynamic,
+        .linkage = .static,
         .root_module = throughput_mod,
     });
 

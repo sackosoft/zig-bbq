@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) void {
 
     const bbqt_exe = b.addExecutable(.{
         .name = "bbq-regress",
-        .linkage = .dynamic,
+        .linkage = .static,
         .root_module = bbqt_mod,
     });
 
