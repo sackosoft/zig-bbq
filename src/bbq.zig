@@ -393,10 +393,11 @@ fn BBQ(comptime T: type, comptime mode: FullHandlingMode, comptime EnqueueError:
 }
 
 test "BBQ (retry-new) enqueues fill the queue then return an error indicating that it is full" {
+    const alloc = std.testing.allocator;
     const T = u8;
     const options = BlockOptions{ .block_number = 4, .block_size = 2 };
 
-    var bbq = try RetryNewQueue(T).init(std.testing.allocator, options);
+    var bbq = try RetryNewQueue(T).init(alloc, options);
     defer bbq.deinit();
 
     for (0..(options.block_number * options.block_size)) |i| {
@@ -407,10 +408,11 @@ test "BBQ (retry-new) enqueues fill the queue then return an error indicating th
 }
 
 test "BBQ (drop-old) enqueues fill the queue then overwrite the oldest entry" {
+    const alloc = std.testing.allocator;
     const T = u8;
     const options = BlockOptions{ .block_number = 4, .block_size = 2 };
 
-    var bbq = try DropOldQueue(T).init(std.testing.allocator, options);
+    var bbq = try DropOldQueue(T).init(alloc, options);
     defer bbq.deinit();
 
     const additional_overwrites: u32 = 100;
@@ -420,10 +422,11 @@ test "BBQ (drop-old) enqueues fill the queue then overwrite the oldest entry" {
 }
 
 test "BBQ (retry-new) basic enqueue/dequeue FIFO and Empty after drain" {
+    const alloc = std.testing.allocator;
     const T = u32;
     const options = BlockOptions{ .block_number = 4, .block_size = 2 }; // capacity = 8
 
-    var bbq = try RetryNewQueue(T).init(std.testing.allocator, options);
+    var bbq = try RetryNewQueue(T).init(alloc, options);
     defer bbq.deinit();
 
     try bbq.enqueue(10);
@@ -438,10 +441,11 @@ test "BBQ (retry-new) basic enqueue/dequeue FIFO and Empty after drain" {
 }
 
 test "BBQ (retry-new) fill exactly, then dequeue all in order and then Empty" {
+    const alloc = std.testing.allocator;
     const T = u16;
     const options = BlockOptions{ .block_number = 4, .block_size = 2 }; // capacity = 8
 
-    var bbq = try RetryNewQueue(T).init(std.testing.allocator, options);
+    var bbq = try RetryNewQueue(T).init(alloc, options);
     defer bbq.deinit();
 
     const cap: usize = options.block_number * options.block_size;
@@ -456,10 +460,11 @@ test "BBQ (retry-new) fill exactly, then dequeue all in order and then Empty" {
 }
 
 test "BBQ (drop-old) overwrites oldest; dequeue returns a contiguous suffix ending with latest" {
+    const alloc = std.testing.allocator;
     const T = u32;
     const options = BlockOptions{ .block_number = 4, .block_size = 2 }; // capacity = 8
 
-    var bbq = try DropOldQueue(T).init(std.testing.allocator, options);
+    var bbq = try DropOldQueue(T).init(alloc, options);
     defer bbq.deinit();
 
     const cap: usize = options.block_number * options.block_size;
@@ -467,15 +472,15 @@ test "BBQ (drop-old) overwrites oldest; dequeue returns a contiguous suffix endi
 
     for (0..total) |i| try bbq.enqueue(@as(T, @truncate(i)));
 
-    var list = std.ArrayList(T).init(std.testing.allocator);
-    defer list.deinit();
+    var list: std.ArrayList(T) = .empty;
+    defer list.deinit(alloc);
 
     while (true) {
         const val = bbq.dequeue() catch |e| switch (e) {
             error.Empty => break,
             else => return e,
         };
-        try list.append(val);
+        try list.append(alloc, val);
     }
 
     try std.testing.expect(list.items.len > 0);
@@ -487,10 +492,11 @@ test "BBQ (drop-old) overwrites oldest; dequeue returns a contiguous suffix endi
 }
 
 test "BBQ (drop-old) interleave dequeues and ensure window behavior" {
+    const alloc = std.testing.allocator;
     const T = u8;
     const options = BlockOptions{ .block_number = 4, .block_size = 2 }; // capacity = 8
 
-    var bbq = try DropOldQueue(T).init(std.testing.allocator, options);
+    var bbq = try DropOldQueue(T).init(alloc, options);
     defer bbq.deinit();
 
     // Enqueue 4 items
@@ -513,10 +519,11 @@ test "BBQ (drop-old) interleave dequeues and ensure window behavior" {
 }
 
 test "BBQ supports non-power-of-two sizes (retry-new): 3 blocks x 3 entries" {
+    const alloc = std.testing.allocator;
     const T = u16;
     const options = BlockOptions{ .block_number = 3, .block_size = 3 }; // capacity = 9 (non-power-of-two)
 
-    var bbq = try RetryNewQueue(T).init(std.testing.allocator, options);
+    var bbq = try RetryNewQueue(T).init(alloc, options);
     defer bbq.deinit();
 
     const cap: usize = options.block_number * options.block_size; // 9
@@ -534,10 +541,11 @@ test "BBQ supports non-power-of-two sizes (retry-new): 3 blocks x 3 entries" {
 }
 
 test "BBQ supports non-power-of-two sizes (drop-old): 3 blocks x 3 entries with overwrite" {
+    const alloc = std.testing.allocator;
     const T = u32;
     const options = BlockOptions{ .block_number = 3, .block_size = 3 }; // capacity = 9 (non-power-of-two)
 
-    var bbq = try DropOldQueue(T).init(std.testing.allocator, options);
+    var bbq = try DropOldQueue(T).init(alloc, options);
     defer bbq.deinit();
 
     const cap: usize = options.block_number * options.block_size; // 9
@@ -545,15 +553,15 @@ test "BBQ supports non-power-of-two sizes (drop-old): 3 blocks x 3 entries with 
     for (0..total) |i| try bbq.enqueue(@as(T, @truncate(i)));
 
     // Collect all available items and validate contiguous increasing suffix ending at latest
-    var list = std.ArrayList(T).init(std.testing.allocator);
-    defer list.deinit();
+    var list: std.ArrayList(T) = .empty;
+    defer list.deinit(alloc);
 
     while (true) {
         const val = bbq.dequeue() catch |e| switch (e) {
             error.Empty => break,
             else => return e,
         };
-        try list.append(val);
+        try list.append(alloc, val);
     }
 
     try std.testing.expect(list.items.len > 0);
@@ -565,10 +573,11 @@ test "BBQ supports non-power-of-two sizes (drop-old): 3 blocks x 3 entries with 
 }
 
 test "BBQ with 3 blocks exposes old mask bug: interleave enq/deq works" {
+    const alloc = std.testing.allocator;
     const T = u8;
     const options = BlockOptions{ .block_number = 3, .block_size = 2 }; // capacity = 6; 3 is non-power-of-two
 
-    var bbq = try DropOldQueue(T).init(std.testing.allocator, options);
+    var bbq = try DropOldQueue(T).init(alloc, options);
     defer bbq.deinit();
 
     // Initial enqueues

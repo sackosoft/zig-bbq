@@ -11,11 +11,11 @@ const Item = struct {
     seq: u64,
 };
 
-pub fn main() !void {
-    try run_throughput_test(.{
+pub fn main(init: std.process.Init) !void {
+    try run_throughput_test(init.gpa, init.io, .{
         .producers = 2,
         .consumers = 2,
-        .items_per_producer = 100_000,
+        .items_per_producer = 10_000_000,
         .block_number = 32,
         .block_size = 512,
     });
@@ -29,23 +29,7 @@ const RegressionTestOptions = struct {
     block_size: u32,
 };
 
-fn printDurationHumanToWriter(writer: anytype, ns: u64) !void {
-    if (ns >= 1_000_000_000) {
-        try writer.print("{d} s", .{ns / 1_000_000_000});
-    } else if (ns >= 1_000_000) {
-        try writer.print("{d} ms", .{ns / 1_000_000});
-    } else if (ns >= 1_000) {
-        try writer.print("{d} us", .{ns / 1_000});
-    } else {
-        try writer.print("{d} ns", .{ns});
-    }
-}
-
-pub fn run_throughput_test(test_options: RegressionTestOptions) !void {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa_state.deinit();
-    const alloc = gpa_state.allocator();
-
+pub fn run_throughput_test(alloc: std.mem.Allocator, io: std.Io, test_options: RegressionTestOptions) !void {
     const options = bbq.BlockOptions{ .block_number = test_options.block_number, .block_size = test_options.block_size };
     var q = try bbq.RetryNewQueue(Item).init(alloc, options);
     defer q.deinit();
@@ -69,7 +53,7 @@ pub fn run_throughput_test(test_options: RegressionTestOptions) !void {
     );
 
     // Start timing after initial setup/logging.
-    var timer = try std.time.Timer.start();
+    const start = std.Io.Timestamp.now(io, .awake);
 
     // Shared counters (plain ints with atomic builtins)
     var deq_ok: usize = 0;
@@ -147,15 +131,17 @@ pub fn run_throughput_test(test_options: RegressionTestOptions) !void {
 
     // Throughput metrics (only reported if correctness check passes)
     const total_items: u64 = @as(u64, @intCast(P)) * n_u64;
-    const elapsed_ns: u64 = timer.read();
     const total_items_f: f64 = @as(f64, @floatFromInt(total_items));
+    const elapsed_ns = start.durationTo(std.Io.Timestamp.now(io, .awake)).nanoseconds;
     const elapsed_ns_f: f64 = @as(f64, @floatFromInt(elapsed_ns));
     const duration_seconds: f64 = if (elapsed_ns != 0) elapsed_ns_f / 1_000_000_000.0 else 0.0;
     const ops_per_second: f64 = if (duration_seconds != 0.0) total_items_f / duration_seconds else 0.0;
     const ns_per_op: f64 = if (total_items != 0) elapsed_ns_f / total_items_f else 0.0;
 
     // Pretty-printed JSON for human and machine consumption, with units in keys.
-    var out = std.io.getStdOut().writer();
+    var stdout_buf: [4096]u8 = undefined;
+    var out_writer = std.Io.File.stdout().writer(io, &stdout_buf);
+    const out = &out_writer.interface;
     try out.print("{{\n", .{});
     try out.print("  \"params\": {{\n", .{});
     try out.print("    \"producers\": {d},\n", .{@as(u64, P)});

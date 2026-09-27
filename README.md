@@ -5,7 +5,7 @@
 **High-performance, lock-free ring buffer for Zig, based on the BBQ algorithm described in [BBQ: A Block-based Bounded Queue for Exchanging Data and Profiling](https://www.usenix.org/conference/atc22/presentation/wang-jiawei).**
 
 ![GitHub License](https://img.shields.io/github/license/sackosoft/zig-bbq)
-![Zig Version](https://img.shields.io/badge/Zig-0.14.1-blue)
+![Zig Version](https://img.shields.io/badge/Zig-0.16.1-blue)
 
 <!--
 TODO: Add a visualization, diagram, or demo of BBQ in action.
@@ -40,7 +40,7 @@ tracing, and debugging.
 
 ## Zig Version
 
-The `main` branch targets the latest stable Zig release (currently `0.14.1`).
+The `main` branch targets the latest stable Zig release (currently `0.16.1`).
 
 
 ## Installation
@@ -99,13 +99,13 @@ concurrently. The entire API is only four functions: `.init()`, `.deinit()`, `.e
 const std = @import("std");
 const bbq = @import("bbq");
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     const options = bbq.BlockOptions{
         .block_number = 4,
         .block_size = 2,
     };
 
-    var q = try bbq.RetryNewQueue(u32).init(std.heap.page_allocator, options);
+    var q = try bbq.RetryNewQueue(u32).init(init.gpa, options);
     defer q.deinit();
 
     const expected: u32 = 42;

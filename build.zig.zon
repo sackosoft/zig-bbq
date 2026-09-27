@@ -2,7 +2,7 @@
     .name = .bbq,
     .version = "0.0.1",
     .fingerprint = 0xc4db8ed33785f48b,
-    .minimum_zig_version = "0.14.1",
+    .minimum_zig_version = "0.16.1",
     .dependencies = .{},
     .paths = .{
         "build.zig",

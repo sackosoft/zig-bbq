@@ -19,9 +19,9 @@ fn checksum(producer_id: u32, seq: u64) u64 {
     return h.final();
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     // SPSC
-    try run_regression_test(.{
+    try run_regression_test(init.gpa, init.io, .{
         .producers = 1,
         .consumers = 1,
         .items_per_producer = 1_000_000,
@@ -30,7 +30,7 @@ pub fn main() !void {
     });
 
     // MPSC
-    try run_regression_test(.{
+    try run_regression_test(init.gpa, init.io, .{
         .producers = 4,
         .consumers = 1,
         .items_per_producer = 1_000_000,
@@ -39,7 +39,7 @@ pub fn main() !void {
     });
 
     // SPMC
-    try run_regression_test(.{
+    try run_regression_test(init.gpa, init.io, .{
         .producers = 1,
         .consumers = 4,
         .items_per_producer = 1_000_000,
@@ -48,7 +48,7 @@ pub fn main() !void {
     });
 
     // MPMC
-    try run_regression_test(.{
+    try run_regression_test(init.gpa, init.io, .{
         .producers = 8,
         .consumers = 8,
         .items_per_producer = 1_000_000,
@@ -65,11 +65,7 @@ const RegressionTestOptions = struct {
     block_size: u32,
 };
 
-pub fn run_regression_test(test_options: RegressionTestOptions) !void {
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa_state.deinit();
-    const alloc = gpa_state.allocator();
-
+pub fn run_regression_test(alloc: std.mem.Allocator, io: std.Io, test_options: RegressionTestOptions) !void {
     // Step 1: Ensure we can initialize and deinit the queue.
     const options = bbq.BlockOptions{ .block_number = test_options.block_number, .block_size = test_options.block_size };
     var q = try bbq.RetryNewQueue(Item).init(alloc, options);
@@ -126,35 +122,35 @@ pub fn run_regression_test(test_options: RegressionTestOptions) !void {
     var consumer_logs = try alloc.alloc(std.ArrayList(Item), C);
     defer {
         // deinit lists
-        for (consumer_logs) |*lst| lst.deinit();
+        for (consumer_logs) |*lst| lst.deinit(alloc);
         alloc.free(consumer_logs);
     }
-    for (consumer_logs) |*lst| lst.* = std.ArrayList(Item).init(alloc);
+    for (consumer_logs) |*lst| lst.* = .empty;
 
     // Watchdog
     var wd_stop: u8 = 0;
     const watcher = try std.Thread.spawn(.{}, struct {
-        fn run(progress_ptr: *u64, wd_stop_ptr: *u8) void {
+        fn run(progress_ptr: *u64, wd_stop_ptr: *u8, _io: std.Io) void {
             const timeout_ns = WATCHDOG_TIMEOUT_SECS * std.time.ns_per_s;
             var last = @atomicLoad(u64, progress_ptr, .acquire);
-            var last_ts = std.time.nanoTimestamp();
+            var last_ts = std.Io.Timestamp.now(_io, .awake).nanoseconds;
             while (@atomicLoad(u8, wd_stop_ptr, .acquire) == 0) {
-                std.time.sleep(10 * std.time.ns_per_ms);
-                const now = std.time.nanoTimestamp();
+                std.Io.sleep(_io, .fromMilliseconds(10), .awake) catch unreachable;
+                const now = std.Io.Timestamp.now(_io, .awake).nanoseconds;
                 const cur = @atomicLoad(u64, progress_ptr, .acquire);
                 if (cur != last) {
                     last = cur;
                     last_ts = now;
                     continue;
                 }
-                if (@as(u128, @intCast(now - last_ts)) > @as(u128, timeout_ns)) {
+                if (@as(i128, @intCast(now - last_ts)) > @as(i128, timeout_ns)) {
                     std.debug.print("WATCHDOG timeout: no progress for {d}s (progress={d})\n", .{ WATCHDOG_TIMEOUT_SECS, cur });
                     // Hard exit on timeout (cross-platform)
                     std.process.exit(1);
                 }
             }
         }
-    }.run, .{ &progress, &wd_stop });
+    }.run, .{ &progress, &wd_stop, io});
     defer watcher.join();
 
     // Spawn producers
@@ -187,7 +183,7 @@ pub fn run_regression_test(test_options: RegressionTestOptions) !void {
     defer alloc.free(cons_threads);
     for (cons_threads, 0..) |*th, cidx| {
         th.* = try std.Thread.spawn(.{}, struct {
-            fn run(queue_ptr: *bbq.RetryNewQueue(Item), barrier_ptr: *Barrier, total_target: usize, deq_count_ptr: *usize, progress_ptr: *u64, out_log: *std.ArrayList(Item)) void {
+            fn run(queue_ptr: *bbq.RetryNewQueue(Item), barrier_ptr: *Barrier, total_target: usize, deq_count_ptr: *usize, progress_ptr: *u64, out_log: *std.ArrayList(Item), allocator: std.mem.Allocator) void {
                 barrier_ptr.wait();
                 while (true) {
                     const done = @atomicLoad(usize, deq_count_ptr, .acquire) >= total_target;
@@ -202,10 +198,10 @@ pub fn run_regression_test(test_options: RegressionTestOptions) !void {
                     _ = @atomicRmw(usize, deq_count_ptr, .Add, 1, .acq_rel);
                     _ = @atomicRmw(u64, progress_ptr, .Add, 1, .acq_rel);
                     // Append to local log
-                    out_log.append(it) catch {};
+                    out_log.append(allocator, it) catch {};
                 }
             }
-        }.run, .{ &q, &barrier, P * @as(usize, @intCast(N)), &deq_ok, &progress, &consumer_logs[cidx] });
+        }.run, .{ &q, &barrier, P * @as(usize, @intCast(N)), &deq_ok, &progress, &consumer_logs[cidx], alloc });
     }
 
     // Join producers
@@ -213,7 +209,7 @@ pub fn run_regression_test(test_options: RegressionTestOptions) !void {
 
     // Wait for consumers to drain remaining items
     while (@atomicLoad(usize, &deq_ok, .acquire) < @as(usize, @intCast(P)) * @as(usize, @intCast(N))) {
-        std.time.sleep(1000);
+        try std.Io.sleep(io, .fromMilliseconds(10), .awake);
     }
     for (cons_threads) |*th| th.join();
 
@@ -226,9 +222,9 @@ pub fn run_regression_test(test_options: RegressionTestOptions) !void {
     const total_deq: usize = @atomicLoad(usize, &deq_ok, .acquire);
 
     // Collate logs into one array for verification
-    var all = std.ArrayList(Item).init(alloc);
-    defer all.deinit();
-    for (consumer_logs) |*lst| try all.appendSlice(lst.items);
+    var all: std.ArrayList(Item) = .empty;
+    defer all.deinit(alloc);
+    for (consumer_logs) |*lst| try all.appendSlice(alloc, lst.items);
 
     // Basic totals
     const expected_total: usize = P * @as(usize, @intCast(N));
