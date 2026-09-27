@@ -20,28 +20,39 @@ designed for high-performance data transfer between threads. BBQ is suitable for
 lossy ("drop-old") producer-consumer scenarios, making it ideal for message passing, work distribution, profiling,
 tracing, and debugging.
 
+The implementation is **lock-free** and **non-blocking**. The library has **zero dependencies**
+outside of Zig's standard library. Queue behavior is configurable. The `RetryNewQueue` is a lossless
+queue, calls to insert are rejected when the queue is full. The `DropOldQueue` is a lossy queue,
+calls to insert overwrite the oldest unconsumed entry when the queue is full.
 
-## Features
+The authors of the research paper make the following claims. I cannot confirm or reject those claims,
+but my own benchmarks on a modest laptop show a throughput of 2,500,000 items per second in a MPMC setup.
+This is more than sufficient for my needs.
 
-- 🔓 **Lock-free** ring buffer for concurrent producer-consumer scenarios.
-- 🚫 **Zero-dependencies** with property based stress tests and runtime assertions.
-- 📄 **Configurable** block count and block size to enable performance tuning.
-    - The paper describes a tradeoff between throughput and latency.
-- 🔀 **Two Modes** of operation:
-    - `RetryNewQueue`: lossless, blocks producers when full.
-    - `DropOldQueue`: lossy, overwrites oldest unconsumed data when full.
-- ⚡ **High-performance** demonstrated across a range of benchmarks
-    - "In **single-producer/single-consumer micro-benchmarks, BBQ yields 11.3x to 42.4x higher throughput** than
-      the ringbuffers from Linux kernel, DPDK, Boost, and Folly libraries."
-    - "In **real world scenarios, BBQ achieves up to 1.5x, 50.5x, and 11.1x performance improvements** in
-       benchmarks of DPDK, Linux io_uring, and Disruptor, respectively."
-    - Emphasis added, [BBQ - USENIX ATC 2022 - Jiawei Wang et al.](https://www.usenix.org/system/files/atc22-wang-jiawei.pdf)
+> "In **single-producer/single-consumer micro-benchmarks, BBQ yields 11.3x to 42.4x higher throughput** than 
+the ringbuffers from Linux kernel, DPDK, Boost, and Folly libraries."
 
+> "In **real world scenarios, BBQ achieves up to 1.5x, 50.5x, and 11.1x performance improvements** in
+benchmarks of DPDK, Linux io\_uring, and Disruptor, respectively."
+
+Emphasis added, [BBQ - USENIX ATC 2022 - Jiawei Wang et al.](https://www.usenix.org/system/files/atc22-wang-jiawei.pdf)
 
 ## Zig Version
 
 The `main` branch targets the latest stable Zig release (currently `0.16.1`).
 
+## AI Usage Disclosure
+
+From my memory, AI was used for the following when developing this project:
+
+- [x] As a teaching aid to dissect and understand topics of the research paper.
+- [x] As a code reviewer to provide opinions and guidance regarding atomic memory ordering semantics.
+- [x] To modify and author some parts of the regression test suite (`regression-test/src/main.zig`).
+- [x] To draft the initial README.md.
+
+AI was never used to author core functionality of the library (`src/bbq.zig`).
+This library was developed as a learning experience and to explore and learn an
+unfamiliar topic (memory models and memory ordering sematics).
 
 ## Installation
 
@@ -88,7 +99,6 @@ pub fn main() !void {
 }
 
 ```
-
 
 ## Example Usage
 
